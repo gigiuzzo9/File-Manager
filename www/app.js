@@ -508,4 +508,9 @@ function syncSettingsUI() {
 document.addEventListener('deviceready', init);
 document.addEventListener('DOMContentLoaded', () => {
   // Se Capacitor non è pronto, fallback
-  if (window.Capacitor && Capacitor.isNative
+  if (window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform()) {
+    console.log('In attesa di deviceready...');
+  } else {
+    init();
+  }
+});
