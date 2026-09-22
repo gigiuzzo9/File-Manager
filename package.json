@@ -2,7 +2,7 @@
   "name": "file-manager",
   "version": "1.0.0",
   "description": "File Manager Android",
-  "author": "gigiuzzo9",
+  "author": "",
   "license": "MIT",
   "dependencies": {
     "@capacitor/android": "^6.1.0",
