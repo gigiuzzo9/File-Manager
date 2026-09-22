@@ -39,8 +39,10 @@ jobs:
       - name: Aggiungi permessi al manifest
         run: |
           MANIFEST=android/app/src/main/AndroidManifest.xml
-          # Inserisce i permessi prima di </manifest>
-          sed -i 's|</manifest>|  <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n  <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />\n  <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />\n  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n</manifest>|' $MANIFEST
+
+          # Permessi per lettura media (Android 13+)
+          sed -i 's|</manifest>|  <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n  <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />\n  <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />\n  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n  <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n</manifest>|' $MANIFEST
+
           echo "--- Manifest dopo modifica ---"
           cat $MANIFEST
 
