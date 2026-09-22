@@ -1,10 +1,9 @@
 // ============================================================
-//  FILE MANAGER — app.js con Capacitor (fix Capacitor 6)
+//  FILE MANAGER — app.js
 // ============================================================
 
-// ---------- ACCESSO AI PLUGIN (compatibile Capacitor 6) ----------
+// ---------- PLUGIN CAPACITOR ----------
 function getPlugin(name) {
-  // Prova vari percorsi per trovare il plugin, in ordine
   if (window.Capacitor?.Plugins?.[name]) return window.Capacitor.Plugins[name];
   if (window.Capacitor?.registerPlugin) {
     try { return window.Capacitor.registerPlugin(name); } catch (e) {}
@@ -13,28 +12,21 @@ function getPlugin(name) {
 }
 
 const Filesystem = getPlugin('Filesystem');
-const Device     = getPlugin('Device');
-
-// Directory enum (fallback se non disponibile)
-const Directory = (window.Capacitor?.Plugins?.Filesystem?.Directory)
-  || { Documents: 'DOCUMENTS', Data: 'DATA', Cache: 'CACHE', External: 'EXTERNAL', ExternalStorage: 'EXTERNAL_STORAGE' };
 
 console.log('Filesystem plugin:', Filesystem);
-console.log('Device plugin:', Device);
-console.log('Directory enum:', Directory);
 
 // ---------- PERCORSI ICONE ----------
 const ICON_FILES = {
-  search:     'icons/search.svg',
-  settings:   'icons/settings.svg',
-  folder:     'icons/folder.svg',
-  folderAdd:  'icons/folder-add.svg',
-  list:       'icons/list.svg',
-  grid:       'icons/grid.svg',
-  images:     'icons/images.svg',
-  audio:      'icons/audio.svg',
-  video:      'icons/video.svg',
-  documents:  'icons/documents.svg',
+  search:     'icons/search.png',
+  settings:   'icons/settings.png',
+  folder:     'icons/folder.png',
+  folderAdd:  'icons/folder-add.png',
+  list:       'icons/list.png',
+  grid:       'icons/grid.png',
+  images:     'icons/images.png',
+  audio:      'icons/audio.png',
+  video:      'icons/video.png',
+  documents:  'icons/documents.png',
 };
 
 const THEMED_ICONS = ['search', 'settings', 'folder', 'folderAdd', 'list', 'grid'];
@@ -74,10 +66,8 @@ const state = {
   view: 'list',
   sort: 'name',
   path: '/',
-  currentPath: '',       // path relativo alla Directory di Capacitor
-  currentDir: null,      // Directory.Documents / External ecc.
-  currentCat: null,
-  clipboard: null,
+  relPath: '',
+  rootDir: null,
   files: [],
   storages: [],
 };
@@ -96,115 +86,93 @@ async function init() {
   }
 
   await detectStorages();
-
-  // Carica la cartella Documenti (che su Android è /storage/emulated/0/Documents)
-  state.currentDir = Directory.Documents;
-  state.currentPath = '';
-  await loadDirectory('', Directory.Documents, 'Documenti');
+  await loadRoot();
 }
 
 // ---------- MEMORIE ----------
 async function detectStorages() {
-  const storages = [];
-
-  // Memoria interna — placeholder, dati reali non accessibili direttamente
-  storages.push({
+  state.storages = [{
     id: 'internal',
     name: 'Memoria interna',
     used: null,
     total: null,
-  });
-
-  // Prova a vedere se External (SD) esiste
-  try {
-    if (Filesystem) {
-      await Filesystem.readdir({ path: '', directory: Directory.External });
-      storages.push({
-        id: 'external',
-        name: 'SD Card',
-        used: null,
-        total: null,
-      });
-    }
-  } catch (e) {
-    // External non esiste → niente SD
-  }
-
-  state.storages = storages;
+  }];
   renderStorages();
 }
 
 function renderStorages() {
   const el = document.getElementById('storages');
   if (!state.storages.length) { el.innerHTML = ''; return; }
-
-  el.innerHTML = state.storages.map(s => {
-    if (s.used === null || s.total === null) {
-      return `
-        <div class="storage">
-          <div><strong>${s.name}</strong></div>
-          <div class="meta">Dati non disponibili</div>
-        </div>`;
-    }
-    const pct = (s.used / s.total) * 100;
-    return `
-      <div class="storage">
-        <div><strong>${s.name}</strong></div>
-        <div class="meta">${s.used.toFixed(1)} GB / ${s.total.toFixed(1)} GB</div>
-        <div class="bar"><span style="width:${pct}%"></span></div>
-      </div>`;
-  }).join('');
+  el.innerHTML = state.storages.map(s => `
+    <div class="storage">
+      <div><strong>${s.name}</strong></div>
+      <div class="meta">Info non disponibili</div>
+    </div>`).join('');
 }
 
-// ---------- LETTURA DIRECTORY ----------
-async function loadDirectory(path, directory, displayName) {
+// ---------- ROOT ----------
+async function loadRoot() {
+  const attempts = [
+    { dir: 'EXTERNAL_STORAGE', label: 'Storage' },
+    { dir: 'EXTERNAL',         label: 'Storage' },
+    { dir: 'DOCUMENTS',        label: 'Documenti' },
+  ];
+
+  for (const a of attempts) {
+    try {
+      const res = await Filesystem.readdir({ path: '', directory: a.dir });
+      state.rootDir = a.dir;
+      state.relPath = '';
+      state.path = '/' + a.label;
+      updatePathBar();
+      state.files = res.files.map(f => ({
+        name: f.name,
+        type: f.type === 'directory' ? 'folder' : guessType(f.name),
+        size: f.size || 0,
+        date: f.mtime ? new Date(f.mtime).toISOString().slice(0,10) : '',
+      }));
+      renderFiles();
+      return;
+    } catch (e) {
+      console.warn('Fallito', a.dir, e.message);
+    }
+  }
+
+  document.getElementById('file-list').innerHTML =
+    '<div class="loading">⚠️ Impossibile accedere allo storage</div>';
+}
+
+async function loadDirectory(path, label) {
   const list = document.getElementById('file-list');
   list.innerHTML = '<div class="loading">Caricamento...</div>';
-
-  state.path = '/' + (displayName || path || '');
-  state.currentDir = directory;
-  state.currentPath = path;
+  state.relPath = path;
+  state.path = '/' + label;
   updatePathBar();
 
   try {
-    const result = await Filesystem.readdir({
-      path: path,
-      directory: directory,
-    });
-
-    console.log('readdir result:', result);
-
-    const items = (result.files || []).map(f => ({
+    const res = await Filesystem.readdir({ path, directory: state.rootDir });
+    state.files = res.files.map(f => ({
       name: f.name,
       type: f.type === 'directory' ? 'folder' : guessType(f.name),
       size: f.size || 0,
       date: f.mtime ? new Date(f.mtime).toISOString().slice(0,10) : '',
-      uri: f.uri,
     }));
-
-    state.files = items;
     renderFiles();
-
   } catch (e) {
-    console.error('Errore lettura directory:', e);
-    list.innerHTML = `
-      <div class="loading">
-        ⚠️ Errore lettura:<br>
-        <small style="word-break:break-all">${e.message || JSON.stringify(e)}</small>
-      </div>`;
+    list.innerHTML = `<div class="loading">⚠️ Errore:<br><small>${e.message}</small></div>`;
   }
 }
 
 function guessType(name) {
   const ext = (name.split('.').pop() || '').toLowerCase();
-  if (['jpg','jpeg','png','gif','webp','bmp','svg'].includes(ext)) return 'img';
-  if (['mp3','wav','ogg','flac','m4a','aac'].includes(ext))        return 'audio';
-  if (['mp4','mkv','avi','mov','webm','3gp'].includes(ext))        return 'video';
+  if (['jpg','jpeg','png','gif','webp','bmp'].includes(ext)) return 'img';
+  if (['mp3','wav','ogg','flac','m4a','aac'].includes(ext))   return 'audio';
+  if (['mp4','mkv','avi','mov','webm','3gp'].includes(ext))   return 'video';
   if (['pdf','doc','docx','txt','xls','xlsx','ppt','pptx'].includes(ext)) return 'doc';
   return 'file';
 }
 
-// ---------- RENDER FILES ----------
+// ---------- RENDER ----------
 function sortedFiles() {
   const arr = [...state.files];
   arr.sort((a, b) => {
@@ -268,8 +236,8 @@ function formatSize(bytes) {
 
 async function onItemClick(item) {
   if (item.type === 'folder') {
-    const newPath = state.currentPath ? state.currentPath + '/' + item.name : item.name;
-    await loadDirectory(newPath, state.currentDir, item.name);
+    const newPath = state.relPath ? state.relPath + '/' + item.name : item.name;
+    await loadDirectory(newPath, item.name);
   } else {
     alert('Apro: ' + item.name);
   }
@@ -305,63 +273,39 @@ document.querySelectorAll('#context-menu button').forEach(btn => {
 async function handleAction(action, item) {
   switch (action) {
     case 'open': onItemClick(item); break;
-
-    case 'copy':
-      state.clipboard = { action: 'copy', item };
-      alert('Copiato: ' + item.name);
-      break;
-
-    case 'cut':
-      state.clipboard = { action: 'cut', item };
-      alert('Tagliato: ' + item.name);
-      break;
-
+    case 'copy': state.clipboard = { action: 'copy', item }; alert('Copiato'); break;
+    case 'cut':  state.clipboard = { action: 'cut', item };  alert('Tagliato'); break;
     case 'paste': alert('Non ancora implementato'); break;
     case 'move':  alert('Non ancora implementato'); break;
-
     case 'rename': {
       const n = prompt('Nuovo nome:', item.name);
       if (!n || n === item.name) return;
       try {
-        const base = state.currentPath ? state.currentPath + '/' : '';
-        await Filesystem.rename({
-          from: base + item.name,
-          to:   base + n,
-          directory: state.currentDir,
-        });
+        const base = state.relPath ? state.relPath + '/' : '';
+        await Filesystem.rename({ from: base + item.name, to: base + n, directory: state.rootDir });
         item.name = n;
         renderFiles();
-      } catch (e) {
-        alert('Errore rinomina: ' + e.message);
-      }
+      } catch (e) { alert('Errore: ' + e.message); }
       break;
     }
-
     case 'share': alert('Non ancora implementato'); break;
-
     case 'delete': {
       if (state.settings.confirmDelete && !confirm('Eliminare ' + item.name + '?')) return;
       try {
-        const base = state.currentPath ? state.currentPath + '/' : '';
-        await Filesystem.deleteFile({
-          path: base + item.name,
-          directory: state.currentDir,
-        });
+        const base = state.relPath ? state.relPath + '/' : '';
+        await Filesystem.deleteFile({ path: base + item.name, directory: state.rootDir });
         state.files = state.files.filter(f => f !== item);
         renderFiles();
-      } catch (e) {
-        alert('Errore eliminazione: ' + e.message);
-      }
+      } catch (e) { alert('Errore: ' + e.message); }
       break;
     }
-
     case 'info':
-      alert(`${item.name}\nTipo: ${item.type}\nDimensione: ${formatSize(item.size)}\nData: ${item.date || 'n/d'}`);
+      alert(`${item.name}\nTipo: ${item.type}\nDimensione: ${formatSize(item.size)}`);
       break;
   }
 }
 
-// ---------- EVENTI UI ----------
+// ---------- EVENTI ----------
 function bindEvents() {
   document.getElementById('search').addEventListener('input', e => {
     const q = e.target.value.toLowerCase();
@@ -379,8 +323,14 @@ function bindEvents() {
     b.addEventListener('click', async () => {
       document.querySelectorAll('.cat-btn').forEach(x => x.classList.remove('active'));
       b.classList.add('active');
-      const cat = b.dataset.cat;
-      await openCategory(cat);
+      const map = {
+        images:    { path: 'DCIM/Camera', label: 'Immagini' },
+        audio:     { path: 'Music',       label: 'Audio'    },
+        video:     { path: 'DCIM',        label: 'Video'    },
+        documents: { path: 'Documents',   label: 'Documenti'},
+      };
+      const t = map[b.dataset.cat];
+      if (t) await loadDirectory(t.path, t.label);
     });
   });
 
@@ -388,16 +338,10 @@ function bindEvents() {
     const n = prompt('Nome nuova cartella:');
     if (!n) return;
     try {
-      const base = state.currentPath ? state.currentPath + '/' : '';
-      await Filesystem.mkdir({
-        path: base + n,
-        directory: state.currentDir,
-        recursive: false,
-      });
-      await loadDirectory(state.currentPath, state.currentDir, state.path.replace(/^\//, ''));
-    } catch (e) {
-      alert('Errore creazione: ' + e.message);
-    }
+      const base = state.relPath ? state.relPath + '/' : '';
+      await Filesystem.mkdir({ path: base + n, directory: state.rootDir, recursive: false });
+      await loadDirectory(state.relPath, state.path.replace(/^\//, ''));
+    } catch (e) { alert('Errore: ' + e.message); }
   });
 
   document.getElementById('sort-select').addEventListener('change', e => {
@@ -413,33 +357,11 @@ function bindEvents() {
   });
 }
 
-// ---------- CATEGORIE ----------
-async function openCategory(cat) {
-  // Mappa categoria → Directory + percorso
-  // Le cartelle standard Android per tipo sono in:
-  //   Immagini → Pictures (o DCIM)
-  //   Audio    → Music
-  //   Video    → Movies (o DCIM)
-  //   Documenti→ Documents
-  // Le Directory di Capacitor coprono solo alcune:
-  let dir = Directory.Documents;
-  let path = '';
-  let label = '';
-
-  switch (cat) {
-    case 'images':   dir = Directory.Documents; path = '../Pictures'; label = 'Immagini'; break;
-    case 'audio':    dir = Directory.Documents; path = '../Music';    label = 'Audio';    break;
-    case 'video':    dir = Directory.Documents; path = '../Movies';   label = 'Video';    break;
-    case 'documents':dir = Directory.Documents; path = '';            label = 'Documenti';break;
-  }
-
-  await loadDirectory(path, dir, label);
-}
-
-// ---------- INIEZIONE ICONE ----------
+// ---------- ICONE NEI BOTTONI ----------
 function injectIcons() {
   document.querySelectorAll('[data-icon]').forEach(el => {
-    el.innerHTML = iconHTML(el.dataset.icon);
+    const name = el.dataset.icon;
+    if (ICON_FILES[name]) el.innerHTML = iconHTML(name);
   });
   const vt = document.getElementById('view-toggle');
   if (vt) vt.innerHTML = iconHTML(state.view === 'list' ? 'list' : 'grid');
@@ -458,15 +380,8 @@ function bindSettings() {
   const panel = document.getElementById('settings-panel');
   const overlay = document.getElementById('settings-overlay');
 
-  const openPanel = () => {
-    panel.classList.remove('hidden');
-    overlay.classList.remove('hidden');
-    syncSettingsUI();
-  };
-  const closePanel = () => {
-    panel.classList.add('hidden');
-    overlay.classList.add('hidden');
-  };
+  const openPanel = () => { panel.classList.remove('hidden'); overlay.classList.remove('hidden'); syncSettingsUI(); };
+  const closePanel = () => { panel.classList.add('hidden'); overlay.classList.add('hidden'); };
 
   document.getElementById('settings-btn').addEventListener('click', openPanel);
   document.getElementById('settings-close').addEventListener('click', closePanel);
@@ -499,8 +414,7 @@ function bindSettings() {
     renderFiles();
   });
 
-  window.matchMedia('(prefers-color-scheme: dark)')
-    .addEventListener('change', () => applySettings());
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applySettings());
 }
 
 function syncSettingsUI() {
@@ -514,14 +428,5 @@ function syncSettingsUI() {
 
 // ---------- GO ----------
 window.addEventListener('load', () => {
-  // Aspetta che Capacitor sia pronto
-  if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
-    document.addEventListener('deviceready', init, { once: true });
-    // Fallback: se deviceready non arriva entro 1s, chiama init comunque
-    setTimeout(() => {
-      if (!state.storages.length) init();
-    }, 1000);
-  } else {
-    init();
-  }
+  init();
 });
