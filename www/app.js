@@ -15,7 +15,7 @@ const Filesystem = getPlugin('Filesystem');
 
 console.log('Filesystem plugin:', Filesystem);
 
-// ---------- PERCORSI ICONE ----------
+// ---------- PERCORSI ICONE (.png) ----------
 const ICON_FILES = {
   search:     'icons/search.png',
   settings:   'icons/settings.png',
@@ -85,8 +85,22 @@ async function init() {
     return;
   }
 
+  await requestAllPermissions();
+
   await detectStorages();
   await loadRoot();
+}
+
+// ---------- PERMESSI ----------
+async function requestAllPermissions() {
+  // Capacitor Filesystem chiede automaticamente i permessi al primo accesso.
+  // Ma per MANAGE_EXTERNAL_STORAGE serve un intent Android esplicito.
+  try {
+    // Prova prima a leggere una cartella nota per attivare la richiesta di sistema
+    await Filesystem.readdir({ path: '', directory: 'EXTERNAL_STORAGE' });
+  } catch (e) {
+    console.log('Prima lettura ha lanciato richiesta permessi:', e.message);
+  }
 }
 
 // ---------- MEMORIE ----------
@@ -110,19 +124,24 @@ function renderStorages() {
     </div>`).join('');
 }
 
-// ---------- ROOT ----------
+// ---------- ROOT STORAGE ----------
 async function loadRoot() {
+  // Su Android con MANAGE_EXTERNAL_STORAGE, il path "/" con EXTERNAL_STORAGE
+  // punta a /storage/emulated/0/
   const attempts = [
-    { dir: 'EXTERNAL_STORAGE', label: 'Storage' },
-    { dir: 'EXTERNAL',         label: 'Storage' },
-    { dir: 'DOCUMENTS',        label: 'Documenti' },
+    { dir: 'EXTERNAL_STORAGE', path: '',        label: 'Storage' },
+    { dir: 'EXTERNAL_STORAGE', path: '/',       label: 'Storage' },
+    { dir: 'EXTERNAL',         path: '',        label: 'Storage' },
+    { dir: 'DOCUMENTS',        path: '',        label: 'Documenti' },
   ];
 
   for (const a of attempts) {
     try {
-      const res = await Filesystem.readdir({ path: '', directory: a.dir });
+      console.log(`Provo ${a.dir} path="${a.path}"...`);
+      const res = await Filesystem.readdir({ path: a.path, directory: a.dir });
+      console.log(`✅ OK con ${a.dir}:`, res);
       state.rootDir = a.dir;
-      state.relPath = '';
+      state.relPath = a.path;
       state.path = '/' + a.label;
       updatePathBar();
       state.files = res.files.map(f => ({
@@ -134,14 +153,19 @@ async function loadRoot() {
       renderFiles();
       return;
     } catch (e) {
-      console.warn('Fallito', a.dir, e.message);
+      console.warn(`❌ Fallito ${a.dir}/${a.path}:`, e.message);
     }
   }
 
-  document.getElementById('file-list').innerHTML =
-    '<div class="loading">⚠️ Impossibile accedere allo storage</div>';
+  document.getElementById('file-list').innerHTML = `
+    <div class="loading">
+      ⚠️ Impossibile accedere allo storage.<br>
+      <small>Vai in Impostazioni Android → App → File Manager → Autorizzazioni<br>
+      e abilita "File e media" / "Gestisci tutti i file".</small>
+    </div>`;
 }
 
+// ---------- LETTURA DIRECTORY ----------
 async function loadDirectory(path, label) {
   const list = document.getElementById('file-list');
   list.innerHTML = '<div class="loading">Caricamento...</div>';
