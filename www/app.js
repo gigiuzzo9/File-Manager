@@ -1,13 +1,29 @@
 // ============================================================
-//  FILE MANAGER — app.js con Capacitor
+//  FILE MANAGER — app.js con Capacitor (fix Capacitor 6)
 // ============================================================
 
-// Riferimenti ai plugin Capacitor
-const { Filesystem, Directory } = Capacitor.Plugins;
-const { Device } = Capacitor.Plugins;
+// ---------- ACCESSO AI PLUGIN (compatibile Capacitor 6) ----------
+function getPlugin(name) {
+  // Prova vari percorsi per trovare il plugin, in ordine
+  if (window.Capacitor?.Plugins?.[name]) return window.Capacitor.Plugins[name];
+  if (window.Capacitor?.registerPlugin) {
+    try { return window.Capacitor.registerPlugin(name); } catch (e) {}
+  }
+  return null;
+}
+
+const Filesystem = getPlugin('Filesystem');
+const Device     = getPlugin('Device');
+
+// Directory enum (fallback se non disponibile)
+const Directory = (window.Capacitor?.Plugins?.Filesystem?.Directory)
+  || { Documents: 'DOCUMENTS', Data: 'DATA', Cache: 'CACHE', External: 'EXTERNAL', ExternalStorage: 'EXTERNAL_STORAGE' };
+
+console.log('Filesystem plugin:', Filesystem);
+console.log('Device plugin:', Device);
+console.log('Directory enum:', Directory);
 
 // ---------- PERCORSI ICONE ----------
-// Metti le tue icone in www/icons/ con questi nomi
 const ICON_FILES = {
   search:     'icons/search.svg',
   settings:   'icons/settings.svg',
@@ -57,12 +73,13 @@ const state = {
   settings: loadSettings(),
   view: 'list',
   sort: 'name',
-  path: '/',              // path corrente mostrato all'utente
-  currentDir: '',         // Directory di Capacitor (Documents, External, ecc.)
-  currentCat: null,       // categoria attiva (images/audio/video/documents)
+  path: '/',
+  currentPath: '',       // path relativo alla Directory di Capacitor
+  currentDir: null,      // Directory.Documents / External ecc.
+  currentCat: null,
   clipboard: null,
-  files: [],              // file/cartelle della cartella corrente
-  storages: [],           // memorie rilevate
+  files: [],
+  storages: [],
 };
 
 // ---------- INIT ----------
@@ -72,57 +89,45 @@ async function init() {
   bindEvents();
   bindSettings();
 
-  // Chiedi i permessi al primo avvio
-  await requestPermissions();
+  if (!Filesystem) {
+    document.getElementById('file-list').innerHTML =
+      '<div class="loading">⚠️ Plugin Filesystem non disponibile</div>';
+    return;
+  }
 
-  // Rileva memorie
   await detectStorages();
 
-  // Carica la root iniziale (Documents)
+  // Carica la cartella Documenti (che su Android è /storage/emulated/0/Documents)
+  state.currentDir = Directory.Documents;
+  state.currentPath = '';
   await loadDirectory('', Directory.Documents, 'Documenti');
-}
-
-// ---------- PERMESSI ----------
-async function requestPermissions() {
-  try {
-    // Filesystem plugin non ha un metodo diretto per permessi;
-    // il primo readDir scatenerà la richiesta di sistema
-    console.log('Permessi verranno chiesti alla prima lettura');
-  } catch (e) {
-    console.warn('Errore permessi:', e);
-  }
 }
 
 // ---------- MEMORIE ----------
 async function detectStorages() {
   const storages = [];
 
-  // Memoria interna: prova a leggere info da Device plugin
-  try {
-    const info = await Device.getInfo();
-    // Info di storage reali non facilmente accessibili; mostriamo un placeholder.
-    // Per dati reali serve un plugin specifico (es. @capacitor/storage-info)
-    storages.push({
-      id: 'internal',
-      name: 'Memoria interna',
-      used: null,
-      total: null,
-    });
-  } catch (e) {
-    console.warn('Errore Device:', e);
-  }
+  // Memoria interna — placeholder, dati reali non accessibili direttamente
+  storages.push({
+    id: 'internal',
+    name: 'Memoria interna',
+    used: null,
+    total: null,
+  });
 
-  // SD Card: prova a leggere /storage/ su Android
+  // Prova a vedere se External (SD) esiste
   try {
-    const result = await Filesystem.readdir({
-      path: '',
-      directory: Directory.External,
-    });
-    // Se arriviamo qui, External esiste → SD presente
-    // In realtà External su Android punta alla SD card se presente
-    // Non è affidabile al 100%, ma è un inizio
+    if (Filesystem) {
+      await Filesystem.readdir({ path: '', directory: Directory.External });
+      storages.push({
+        id: 'external',
+        name: 'SD Card',
+        used: null,
+        total: null,
+      });
+    }
   } catch (e) {
-    // Se fallisce, niente SD
+    // External non esiste → niente SD
   }
 
   state.storages = storages;
@@ -131,10 +136,7 @@ async function detectStorages() {
 
 function renderStorages() {
   const el = document.getElementById('storages');
-  if (!state.storages.length) {
-    el.innerHTML = '';
-    return;
-  }
+  if (!state.storages.length) { el.innerHTML = ''; return; }
 
   el.innerHTML = state.storages.map(s => {
     if (s.used === null || s.total === null) {
@@ -159,8 +161,9 @@ async function loadDirectory(path, directory, displayName) {
   const list = document.getElementById('file-list');
   list.innerHTML = '<div class="loading">Caricamento...</div>';
 
-  state.path = '/' + (displayName || path);
+  state.path = '/' + (displayName || path || '');
   state.currentDir = directory;
+  state.currentPath = path;
   updatePathBar();
 
   try {
@@ -169,18 +172,14 @@ async function loadDirectory(path, directory, displayName) {
       directory: directory,
     });
 
-    // result.files: array di { name, type, size, mtime, uri }
-    // type: 'file' | 'directory'
-    const items = await Promise.all(result.files.map(async f => {
-      let size = f.size || 0;
-      let date = f.mtime ? new Date(f.mtime).toISOString().slice(0,10) : '';
-      return {
-        name: f.name,
-        type: f.type === 'directory' ? 'folder' : guessType(f.name),
-        size: size,
-        date: date,
-        uri: f.uri,
-      };
+    console.log('readdir result:', result);
+
+    const items = (result.files || []).map(f => ({
+      name: f.name,
+      type: f.type === 'directory' ? 'folder' : guessType(f.name),
+      size: f.size || 0,
+      date: f.mtime ? new Date(f.mtime).toISOString().slice(0,10) : '',
+      uri: f.uri,
     }));
 
     state.files = items;
@@ -190,17 +189,17 @@ async function loadDirectory(path, directory, displayName) {
     console.error('Errore lettura directory:', e);
     list.innerHTML = `
       <div class="loading">
-        ⚠️ Impossibile leggere la cartella.<br>
-        <small>${e.message || ''}</small>
+        ⚠️ Errore lettura:<br>
+        <small style="word-break:break-all">${e.message || JSON.stringify(e)}</small>
       </div>`;
   }
 }
 
 function guessType(name) {
-  const ext = name.split('.').pop().toLowerCase();
+  const ext = (name.split('.').pop() || '').toLowerCase();
   if (['jpg','jpeg','png','gif','webp','bmp','svg'].includes(ext)) return 'img';
-  if (['mp3','wav','ogg','flac','m4a','aac'].includes(ext))          return 'audio';
-  if (['mp4','mkv','avi','mov','webm','3gp'].includes(ext))           return 'video';
+  if (['mp3','wav','ogg','flac','m4a','aac'].includes(ext))        return 'audio';
+  if (['mp4','mkv','avi','mov','webm','3gp'].includes(ext))        return 'video';
   if (['pdf','doc','docx','txt','xls','xlsx','ppt','pptx'].includes(ext)) return 'doc';
   return 'file';
 }
@@ -269,8 +268,7 @@ function formatSize(bytes) {
 
 async function onItemClick(item) {
   if (item.type === 'folder') {
-    const newPath = (state.currentPath === undefined ? '' : state.currentPath + '/') + item.name;
-    state.currentPath = newPath;
+    const newPath = state.currentPath ? state.currentPath + '/' + item.name : item.name;
     await loadDirectory(newPath, state.currentDir, item.name);
   } else {
     alert('Apro: ' + item.name);
@@ -306,9 +304,7 @@ document.querySelectorAll('#context-menu button').forEach(btn => {
 
 async function handleAction(action, item) {
   switch (action) {
-    case 'open':
-      onItemClick(item);
-      break;
+    case 'open': onItemClick(item); break;
 
     case 'copy':
       state.clipboard = { action: 'copy', item };
@@ -320,22 +316,17 @@ async function handleAction(action, item) {
       alert('Tagliato: ' + item.name);
       break;
 
-    case 'paste':
-      alert('Incolla non ancora implementato');
-      break;
-
-    case 'move':
-      alert('Sposta non ancora implementato');
-      break;
+    case 'paste': alert('Non ancora implementato'); break;
+    case 'move':  alert('Non ancora implementato'); break;
 
     case 'rename': {
       const n = prompt('Nuovo nome:', item.name);
       if (!n || n === item.name) return;
       try {
-        const basePath = state.currentPath ? state.currentPath + '/' : '';
+        const base = state.currentPath ? state.currentPath + '/' : '';
         await Filesystem.rename({
-          from: basePath + item.name,
-          to:   basePath + n,
+          from: base + item.name,
+          to:   base + n,
           directory: state.currentDir,
         });
         item.name = n;
@@ -346,16 +337,14 @@ async function handleAction(action, item) {
       break;
     }
 
-    case 'share':
-      alert('Condividi non ancora implementato');
-      break;
+    case 'share': alert('Non ancora implementato'); break;
 
     case 'delete': {
       if (state.settings.confirmDelete && !confirm('Eliminare ' + item.name + '?')) return;
       try {
-        const basePath = state.currentPath ? state.currentPath + '/' : '';
+        const base = state.currentPath ? state.currentPath + '/' : '';
         await Filesystem.deleteFile({
-          path: basePath + item.name,
+          path: base + item.name,
           directory: state.currentDir,
         });
         state.files = state.files.filter(f => f !== item);
@@ -390,12 +379,8 @@ function bindEvents() {
     b.addEventListener('click', async () => {
       document.querySelectorAll('.cat-btn').forEach(x => x.classList.remove('active'));
       b.classList.add('active');
-      state.currentCat = b.dataset.cat;
-
-      // Mappa categoria → Directory
-      // Per ora apriamo Directory.Documents filtrando
-      // Nota: Capacitor non ha una Directory per ogni categoria, serve percorso
-      alert('Categoria: ' + b.dataset.cat + ' (da implementare)');
+      const cat = b.dataset.cat;
+      await openCategory(cat);
     });
   });
 
@@ -403,13 +388,13 @@ function bindEvents() {
     const n = prompt('Nome nuova cartella:');
     if (!n) return;
     try {
-      const basePath = state.currentPath ? state.currentPath + '/' : '';
+      const base = state.currentPath ? state.currentPath + '/' : '';
       await Filesystem.mkdir({
-        path: basePath + n,
+        path: base + n,
         directory: state.currentDir,
         recursive: false,
       });
-      await loadDirectory(state.currentPath, state.currentDir, '');
+      await loadDirectory(state.currentPath, state.currentDir, state.path.replace(/^\//, ''));
     } catch (e) {
       alert('Errore creazione: ' + e.message);
     }
@@ -426,6 +411,29 @@ function bindEvents() {
       iconHTML(state.view === 'list' ? 'list' : 'grid');
     renderFiles();
   });
+}
+
+// ---------- CATEGORIE ----------
+async function openCategory(cat) {
+  // Mappa categoria → Directory + percorso
+  // Le cartelle standard Android per tipo sono in:
+  //   Immagini → Pictures (o DCIM)
+  //   Audio    → Music
+  //   Video    → Movies (o DCIM)
+  //   Documenti→ Documents
+  // Le Directory di Capacitor coprono solo alcune:
+  let dir = Directory.Documents;
+  let path = '';
+  let label = '';
+
+  switch (cat) {
+    case 'images':   dir = Directory.Documents; path = '../Pictures'; label = 'Immagini'; break;
+    case 'audio':    dir = Directory.Documents; path = '../Music';    label = 'Audio';    break;
+    case 'video':    dir = Directory.Documents; path = '../Movies';   label = 'Video';    break;
+    case 'documents':dir = Directory.Documents; path = '';            label = 'Documenti';break;
+  }
+
+  await loadDirectory(path, dir, label);
 }
 
 // ---------- INIEZIONE ICONE ----------
@@ -505,11 +513,14 @@ function syncSettingsUI() {
 }
 
 // ---------- GO ----------
-document.addEventListener('deviceready', init);
-document.addEventListener('DOMContentLoaded', () => {
-  // Se Capacitor non è pronto, fallback
-  if (window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform()) {
-    console.log('In attesa di deviceready...');
+window.addEventListener('load', () => {
+  // Aspetta che Capacitor sia pronto
+  if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+    document.addEventListener('deviceready', init, { once: true });
+    // Fallback: se deviceready non arriva entro 1s, chiama init comunque
+    setTimeout(() => {
+      if (!state.storages.length) init();
+    }, 1000);
   } else {
     init();
   }
