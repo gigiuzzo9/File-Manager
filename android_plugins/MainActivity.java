@@ -4,6 +4,9 @@ import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
-    // Nessun registerPlugin manuale:
-    // Capacitor 6 registra i plugin automaticamente tramite @CapacitorPlugin
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(FileReaderPlugin.class);
+        super.onCreate(savedInstanceState);
+    }
 }
