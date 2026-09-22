@@ -1,4 +1,4 @@
-name: Build APK Android
+name: Build APK
 
 on:
   push:
@@ -6,53 +6,37 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-apk:
+  build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout codice
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Setup Java JDK 17
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: 'zulu'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
         with:
-          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
-          log-accepted-android-sdk-licenses: false
+          flutter-version: '3.24.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Crea progetto Flutter base
+        run: |
+          flutter create --org com.example --project-name file_manager --platforms=android .
 
       - name: Installa dipendenze
-        run: npm install
+        run: flutter pub get
 
-      - name: Aggiungi piattaforma Android
-        run: npx cap add android
-
-      - name: Sincronizza web app
-        run: npx cap sync android
-
-      - name: Compila APK
-        run: |
-          cd android
-          chmod +x ./gradlew
-          ./gradlew assembleDebug
-
-      - name: Rinomina APK
-        run: |
-          mv android/app/build/outputs/apk/debug/app-debug.apk \
-             android/app/build/outputs/apk/debug/FileManager.apk
+      - name: Build APK
+        run: flutter build apk --release
 
       - name: Carica APK come artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FileManager-APK
-          path: android/app/build/outputs/apk/debug/FileManager.apk
-          retention-days: 30
+          name: file-manager-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
