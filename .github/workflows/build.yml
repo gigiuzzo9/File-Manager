@@ -39,23 +39,6 @@ jobs:
       - name: Sincronizza web app
         run: npx cap sync android
 
-      - name: Copia i plugin nativi (DOPO sync!)
-        run: |
-          mkdir -p android/app/src/main/java/com/filemanager/app
-          cp android_plugins/FileReaderPlugin.java android/app/src/main/java/com/filemanager/app/
-          cp android_plugins/MainActivity.java     android/app/src/main/java/com/filemanager/app/
-          echo "--- File nella cartella java ---"
-          ls -la android/app/src/main/java/com/filemanager/app/
-          echo "--- Contenuto MainActivity.java ---"
-          cat android/app/src/main/java/com/filemanager/app/MainActivity.java
-
-      - name: Aggiungi permessi al manifest
-        run: |
-          MANIFEST=android/app/src/main/AndroidManifest.xml
-          sed -i 's|</manifest>|  <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n  <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />\n  <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />\n  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n  <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n</manifest>|' $MANIFEST
-          echo "--- Manifest ---"
-          cat $MANIFEST
-
       - name: Compila APK
         run: |
           cd android
