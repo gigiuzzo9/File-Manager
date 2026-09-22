@@ -36,14 +36,19 @@ jobs:
       - name: Aggiungi piattaforma Android
         run: npx cap add android
 
+      - name: Copia i plugin nativi
+        run: |
+          mkdir -p android/app/src/main/java/com/filemanager/app
+          cp android_plugins/FileReaderPlugin.java android/app/src/main/java/com/filemanager/app/
+          cp android_plugins/MainActivity.java     android/app/src/main/java/com/filemanager/app/
+          echo "--- File nella cartella java ---"
+          ls -la android/app/src/main/java/com/filemanager/app/
+
       - name: Aggiungi permessi al manifest
         run: |
           MANIFEST=android/app/src/main/AndroidManifest.xml
-
-          # Permessi per lettura media (Android 13+)
           sed -i 's|</manifest>|  <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n  <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />\n  <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />\n  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n  <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n</manifest>|' $MANIFEST
-
-          echo "--- Manifest dopo modifica ---"
+          echo "--- Manifest ---"
           cat $MANIFEST
 
       - name: Sincronizza web app
