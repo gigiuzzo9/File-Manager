@@ -36,6 +36,14 @@ jobs:
       - name: Aggiungi piattaforma Android
         run: npx cap add android
 
+      - name: Aggiungi permessi al manifest
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          # Inserisce i permessi prima di </manifest>
+          sed -i 's|</manifest>|  <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n  <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />\n  <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />\n  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n</manifest>|' $MANIFEST
+          echo "--- Manifest dopo modifica ---"
+          cat $MANIFEST
+
       - name: Sincronizza web app
         run: npx cap sync android
 
