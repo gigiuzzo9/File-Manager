@@ -3,12 +3,14 @@ package com.filemanager.app;
 import android.os.Environment;
 import android.util.Log;
 
-import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.io.File;
 
@@ -46,9 +48,9 @@ public class FileReaderPlugin extends Plugin {
                 return;
             }
 
-            JSArray list = new JSArray();
+            JSONArray list = new JSONArray();
             for (File f : files) {
-                JSObject item = new JSObject();
+                JSONObject item = new JSONObject();
                 item.put("name", f.getName());
                 item.put("path", f.getAbsolutePath());
                 item.put("isDirectory", f.isDirectory());
