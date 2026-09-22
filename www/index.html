@@ -41,8 +41,13 @@
     <button id="view-toggle" class="icon-btn" data-icon="list"></button>
   </section>
 
+  <!-- PATH corrente -->
+  <div id="path-bar" class="path-bar">/</div>
+
   <!-- LISTA FILE -->
-  <main id="file-list" class="file-list list-view"></main>
+  <main id="file-list" class="file-list list-view">
+    <div class="loading">Caricamento...</div>
+  </main>
 
   <!-- MENU CONTESTUALE -->
   <div id="context-menu" class="context-menu hidden">
@@ -57,6 +62,57 @@
     <button data-action="info">Proprietà</button>
   </div>
 
+  <!-- OVERLAY impostazioni -->
+  <div id="settings-overlay" class="overlay hidden"></div>
+
+  <!-- PANNELLO IMPOSTAZIONI -->
+  <aside id="settings-panel" class="settings-panel hidden">
+    <header class="settings-header">
+      <h2>Impostazioni</h2>
+      <button id="settings-close" class="icon-btn">✕</button>
+    </header>
+
+    <section class="settings-group">
+      <h3>Aspetto</h3>
+      <div class="setting-row">
+        <label>Tema</label>
+        <select id="set-theme">
+          <option value="light">Chiaro</option>
+          <option value="dark">Scuro</option>
+          <option value="auto">Automatico</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <label>Colore accento</label>
+        <input type="color" id="set-accent" value="#3b82f6">
+      </div>
+    </section>
+
+    <section class="settings-group">
+      <h3>File</h3>
+      <div class="setting-row">
+        <label>Mostra estensioni file</label>
+        <input type="checkbox" id="set-showext" checked>
+      </div>
+      <div class="setting-row">
+        <label>Conferma eliminazione</label>
+        <input type="checkbox" id="set-confirmdelete" checked>
+      </div>
+      <div class="setting-row">
+        <label>Cartelle prima dei file</label>
+        <input type="checkbox" id="set-foldersfirst" checked>
+      </div>
+    </section>
+
+    <section class="settings-group">
+      <h3>Info</h3>
+      <p class="setting-info">File Manager v1.0.0</p>
+      <button id="reset-settings" class="btn-secondary">Ripristina impostazioni</button>
+    </section>
+  </aside>
+
+  <!-- Carica Capacitor prima di app.js -->
+  <script src="capacitor.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
