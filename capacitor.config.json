@@ -1,0 +1,8 @@
+{
+  "appId": "com.filemanager.app",
+  "appName": "File Manager",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": true
+  }
+}
