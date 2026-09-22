@@ -178,3 +178,24 @@ body {
 .context-menu button:active { background: var(--border); }
 
 .hidden { display: none !important; }
+/* Icone come <img> */
+.icon-img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  display: block;
+}
+
+/* Nell'header (ingranaggio) */
+.topbar .icon-img { width: 22px; height: 22px; }
+
+/* Nei bottoni categoria (più grandi) */
+.cat-btn .icon-img { width: 28px; height: 28px; }
+
+/* Nella lista file */
+.file-item .icon .icon-img { width: 24px; height: 24px; }
+
+/* Icone che devono seguire il tema (monocolore) */
+body.dark .themed-icon {
+  filter: invert(1) brightness(1.2);
+}
