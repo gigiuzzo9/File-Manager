@@ -45,6 +45,9 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 class MainActivity : AppCompatActivity() {
 
@@ -155,14 +158,13 @@ class MainActivity : AppCompatActivity() {
         btnPaste.visibility = if (clipboardPath != null) View.VISIBLE else View.GONE
     }
 
-    // ---------- CARD STORAGE (dinamiche) ----------
+    // ---------- CARD STORAGE ----------
 
     private fun updateStorageCards() {
         storageRow.removeAllViews()
 
         val volumes = mutableListOf<StorageVolumeInfo>()
 
-        // 1) Memoria interna (sempre)
         try {
             val stat = StatFs(Environment.getExternalStorageDirectory().path)
             val totalBytes = stat.blockCountLong * stat.blockSizeLong
@@ -187,7 +189,6 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        // 2) Volumi esterni (SD, USB)
         try {
             val storageManager = getSystemService(STORAGE_SERVICE) as StorageManager
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -218,7 +219,6 @@ class MainActivity : AppCompatActivity() {
             }
         } catch (_: Exception) {}
 
-        // Crea una card per ogni volume
         for ((index, vol) in volumes.withIndex()) {
             val card = createStorageCard(vol)
             val params = LinearLayout.LayoutParams(
@@ -835,6 +835,15 @@ class MainActivity : AppCompatActivity() {
         options.add("Copia")
         options.add("Taglia")
         if (clipboardPath != null) options.add("Incolla qui")
+
+        // Comprimi / Decomprimi
+        val isZip = item.name.lowercase().endsWith(".zip")
+        if (isZip) {
+            options.add("Decomprimi qui")
+        } else {
+            options.add("Comprimi in ZIP")
+        }
+
         options.add("Rinomina")
         options.add("Elimina")
         options.add("Proprietà")
@@ -860,12 +869,163 @@ class MainActivity : AppCompatActivity() {
                         updatePasteButton()
                     }
                     "Incolla qui" -> pasteFromClipboard()
+                    "Comprimi in ZIP" -> comprimiZip(item)
+                    "Decomprimi qui" -> decomprimiZip(item)
                     "Rinomina" -> renameItem(item)
                     "Elimina" -> deleteItem(item)
                     "Proprietà" -> showItemInfo(item)
                 }
             }
             .show()
+    }
+
+    // ---------- COMPRIMI / DECOMPRIMI ----------
+
+    private fun comprimiZip(item: FileItem) {
+        val zipName = if (item.isDirectory) "${item.name}.zip" else item.name.substringBeforeLast(".") + ".zip"
+        val zipFile = File(currentPath, zipName)
+
+        if (zipFile.exists()) {
+            Toast.makeText(this, "Esiste già: $zipName", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        Toast.makeText(this, "Compressione in corso...", Toast.LENGTH_SHORT).show()
+
+        executor.execute {
+            var ok = false
+            var errorMsg = ""
+
+            try {
+                ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
+                    if (item.isDirectory) {
+                        addDirectoryToZip(item.file, item.file.name, zos)
+                    } else {
+                        addFileToZip(item.file, item.file.name, zos)
+                    }
+                }
+                ok = true
+            } catch (e: Exception) {
+                ok = false
+                errorMsg = e.message ?: e.toString()
+                try { zipFile.delete() } catch (_: Exception) {}
+            }
+
+            if (ok) scanPath(zipFile.absolutePath)
+
+            mainHandler.post {
+                if (ok) {
+                    Toast.makeText(this, "Creato: $zipName", Toast.LENGTH_SHORT).show()
+                    loadDirectory(currentPath)
+                } else {
+                    AlertDialog.Builder(this)
+                        .setTitle("Errore Compressione")
+                        .setMessage("File: ${item.name}\n\nErrore:\n$errorMsg")
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
+            }
+        }
+    }
+
+    private fun addDirectoryToZip(dir: File, basePath: String, zos: ZipOutputStream) {
+        val files = dir.listFiles() ?: return
+        for (f in files) {
+            val entryName = "$basePath/${f.name}"
+            if (f.isDirectory) {
+                addDirectoryToZip(f, entryName, zos)
+            } else {
+                addFileToZip(f, entryName, zos)
+            }
+        }
+    }
+
+    private fun addFileToZip(file: File, entryName: String, zos: ZipOutputStream) {
+        FileInputStream(file).use { fis ->
+            val entry = ZipEntry(entryName)
+            zos.putNextEntry(entry)
+            val buffer = ByteArray(8192)
+            var length: Int
+            while (fis.read(buffer).also { length = it } > 0) {
+                zos.write(buffer, 0, length)
+            }
+            zos.closeEntry()
+        }
+    }
+
+    private fun decomprimiZip(item: FileItem) {
+        if (!item.name.lowercase().endsWith(".zip")) {
+            Toast.makeText(this, "Non è un file ZIP", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val baseName = item.name.substringBeforeLast(".")
+        val extractDir = File(currentPath, baseName)
+
+        if (!extractDir.exists()) {
+            extractDir.mkdirs()
+        }
+
+        Toast.makeText(this, "Decompressione in corso...", Toast.LENGTH_SHORT).show()
+
+        executor.execute {
+            var ok = false
+            var errorMsg = ""
+            var filesExtracted = 0
+
+            try {
+                ZipInputStream(FileInputStream(item.file)).use { zis ->
+                    var entry: ZipEntry? = zis.nextEntry
+                    while (entry != null) {
+                        val entryName = entry.name
+                        val outFile = File(extractDir, entryName)
+
+                        // Sicurezza: evita path traversal (../)
+                        if (!outFile.canonicalPath.startsWith(extractDir.canonicalPath)) {
+                            entry = zis.nextEntry
+                            continue
+                        }
+
+                        if (entry.isDirectory) {
+                            outFile.mkdirs()
+                        } else {
+                            outFile.parentFile?.mkdirs()
+                            FileOutputStream(outFile).use { fos ->
+                                val buffer = ByteArray(8192)
+                                var length: Int
+                                while (zis.read(buffer).also { length = it } > 0) {
+                                    fos.write(buffer, 0, length)
+                                }
+                                fos.flush()
+                            }
+                            filesExtracted++
+                        }
+
+                        zis.closeEntry()
+                        entry = zis.nextEntry
+                    }
+                }
+                ok = true
+            } catch (e: Exception) {
+                ok = false
+                errorMsg = e.message ?: e.toString()
+            }
+
+            if (ok) scanPath(extractDir.absolutePath)
+
+            mainHandler.post {
+                if (ok) {
+                    Toast.makeText(this, "Estratti $filesExtracted file in: $baseName/", Toast.LENGTH_SHORT).show()
+                    loadDirectory(currentPath)
+                } else {
+                    AlertDialog.Builder(this)
+                        .setTitle("Errore Decompressione")
+                        .setMessage("File: ${item.name}\n\nErrore:\n$errorMsg")
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
+            }
+        }
     }
 
     private fun shareFile(item: FileItem) {
