@@ -25,7 +25,6 @@ import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.TypedValue
-import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.BaseAdapter
@@ -89,7 +88,6 @@ class MainActivity : AppCompatActivity() {
     private var clipboardPath: String? = null
     private var clipboardAction: String? = null
 
-    // Selezione multipla
     private var selectionMode: Boolean = false
     private val selectedPaths = mutableSetOf<String>()
 
@@ -144,7 +142,6 @@ class MainActivity : AppCompatActivity() {
         findViewById<LinearLayout>(R.id.catVideo).setOnClickListener { setCategory("video") }
         findViewById<LinearLayout>(R.id.catDocs).setOnClickListener { setCategory("documents") }
 
-        // Pulsanti barra di selezione
         findViewById<ImageButton>(R.id.btnSelectionClose).setOnClickListener { exitSelectionMode() }
         findViewById<ImageButton>(R.id.btnSelDelete).setOnClickListener { deleteSelectedFiles() }
         findViewById<ImageButton>(R.id.btnSelCopy).setOnClickListener { copySelectedFiles("copy") }
@@ -263,8 +260,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun copySelectedFiles(action: String) {
         if (selectedPaths.isEmpty()) return
-        // Per semplicità: salva il primo file nella clipboard (come prima)
-        // Se vuoi copiare più file insieme, serve una lista più complessa
         val first = selectedPaths.first()
         clipboardPath = first
         clipboardAction = action
@@ -285,7 +280,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // Più file: usa ACTION_SEND_MULTIPLE
         try {
             val uris = ArrayList<Uri>()
             for (path in selectedPaths) {
@@ -895,7 +889,6 @@ class MainActivity : AppCompatActivity() {
 
             val density = resources.displayMetrics.density
 
-            // Adapter custom più grande
             val adapter = object : BaseAdapter() {
                 override fun getCount() = filtered.size
                 override fun getItem(position: Int) = filtered[position]
@@ -1008,7 +1001,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- MENU CONTESTUALE (per singolo file) ----------
+    // ---------- MENU CONTESTUALE ----------
 
     private fun showItemMenu(item: FileItem) {
         val options = mutableListOf<String>()
@@ -1511,7 +1504,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- RINOMINA / ELIMINA (singolo) ----------
+    // ---------- RINOMINA / ELIMINA ----------
 
     private fun renameItem(item: FileItem) {
         val input = EditText(this)
