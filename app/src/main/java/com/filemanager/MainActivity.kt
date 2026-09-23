@@ -1,7 +1,6 @@
 package com.filemanager
 
 import android.app.PendingIntent
-import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Intent
 import android.content.SharedPreferences
@@ -12,7 +11,6 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.StatFs
-import android.os.storage.StorageManager
 import android.provider.MediaStore
 import android.provider.Settings
 import android.text.Editable
@@ -40,8 +38,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var editSearch: EditText
     private lateinit var prefs: SharedPreferences
 
-    private val ROOT_INTERNAL = "/storage/emulated/0"
-    private var currentPath: String = ROOT_INTERNAL
+    // Path root DINAMICO, letto dal sistema (come Fossify)
+    private val rootInternal: String
+        get() = if (File("/storage/emulated/0").exists()) {
+            "/storage/emulated/0"
+        } else {
+            Environment.getExternalStorageDirectory().absolutePath.trimEnd('/')
+        }
+
+    private var currentPath: String = ""
     private var allItems: List<FileItem> = emptyList()
     private var displayedItems: List<FileItem> = emptyList()
 
@@ -65,6 +70,11 @@ class MainActivity : AppCompatActivity() {
         showHidden = prefs.getBoolean("show_hidden", false)
         isGrid = prefs.getBoolean("is_grid", false)
         sortBy = prefs.getString("sort_by", "name") ?: "name"
+
+        currentPath = rootInternal
+
+        // Toast di debug — rimuovi dopo il test
+        Toast.makeText(this, "ROOT: $rootInternal", Toast.LENGTH_LONG).show()
 
         recycler = findViewById(R.id.recyclerFiles)
         txtPath = findViewById(R.id.txtPath)
@@ -91,7 +101,7 @@ class MainActivity : AppCompatActivity() {
             activeCategory = null
             searchQuery = ""
             editSearch.setText("")
-            loadDirectory(ROOT_INTERNAL, resetCategory = true)
+            loadDirectory(rootInternal, resetCategory = true)
         }
 
         findViewById<LinearLayout>(R.id.catImages).setOnClickListener { setCategory("images") }
@@ -264,7 +274,7 @@ class MainActivity : AppCompatActivity() {
     private fun setCategory(cat: String) {
         if (activeCategory == cat) {
             activeCategory = null
-            loadDirectory(ROOT_INTERNAL, resetCategory = true)
+            loadDirectory(rootInternal, resetCategory = true)
             return
         }
 
@@ -275,7 +285,7 @@ class MainActivity : AppCompatActivity() {
         executor.execute {
             val found = mutableListOf<FileItem>()
             try {
-                scanRecursive(File(ROOT_INTERNAL), found, cat, 0)
+                scanRecursive(File(rootInternal), found, cat, 0)
             } catch (_: Exception) {}
 
             val sorted = when (sortBy) {
@@ -471,7 +481,7 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // ---------- OPERAZIONI FILE (metodo Fossify) ----------
+    // ---------- OPERAZIONI FILE ----------
 
     private fun shareFile(item: FileItem) {
         try {
@@ -514,9 +524,7 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: Exception) {}
             }
 
-            if (ok) {
-                scanPath(dst.absolutePath)
-            }
+            if (ok) scanPath(dst.absolutePath)
 
             mainHandler.post {
                 if (ok) {
@@ -557,7 +565,6 @@ class MainActivity : AppCompatActivity() {
                     val newFile = File(parent, newName)
                     val ok = item.file.renameTo(newFile)
                     if (ok) {
-                        // Aggiorna MediaStore
                         updateInMediaStore(item.path, newFile.absolutePath)
                         scanPath(newFile.absolutePath)
                         Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
@@ -586,7 +593,6 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     if (ok) {
-                        // Rimuovi da MediaStore (fondamentale!)
                         deleteFromMediaStore(item.path)
                         scanPath(item.path)
                         Toast.makeText(this, "Eliminato", Toast.LENGTH_SHORT).show()
@@ -610,9 +616,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         val deleted = file.delete()
-        if (deleted) {
-            deleteFromMediaStore(file.absolutePath)
-        }
+        if (deleted) deleteFromMediaStore(file.absolutePath)
         return deleted
     }
 
@@ -620,9 +624,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun deleteFromMediaStore(path: String) {
         try {
-            val file = File(path)
-            if (file.isDirectory) return
-
+            if (File(path).isDirectory) return
             val uri = getMediaStoreUri(path)
             val selection = "${MediaStore.MediaColumns.DATA} = ?"
             val selectionArgs = arrayOf(path)
@@ -632,13 +634,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateInMediaStore(oldPath: String, newPath: String) {
         try {
-            val file = File(newPath)
-            if (file.isDirectory) return
-
+            if (File(newPath).isDirectory) return
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DATA, newPath)
-                put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
-                put(MediaStore.MediaColumns.TITLE, file.name)
+                put(MediaStore.MediaColumns.DISPLAY_NAME, File(newPath).name)
+                put(MediaStore.MediaColumns.TITLE, File(newPath).name)
             }
             val uri = getMediaStoreUri(oldPath)
             val selection = "${MediaStore.MediaColumns.DATA} = ?"
@@ -778,15 +778,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun goBack() {
-        if (currentPath == ROOT_INTERNAL) return
+        if (currentPath == rootInternal) return
         val parent = File(currentPath).parent
-        if (parent != null && parent.startsWith(ROOT_INTERNAL)) {
+        if (parent != null && parent.startsWith(rootInternal)) {
             loadDirectory(parent)
         }
     }
 
     override fun onBackPressed() {
-        if (currentPath != ROOT_INTERNAL) {
+        if (currentPath != rootInternal) {
             goBack()
         } else {
             super.onBackPressed()
