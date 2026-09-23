@@ -7,6 +7,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.os.StatFs
 import android.provider.Settings
 import android.text.Editable
@@ -23,12 +25,14 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import java.io.File
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var recycler: RecyclerView
     private lateinit var txtPath: TextView
     private lateinit var txtInternalInfo: TextView
+    private lateinit var txtSort: TextView
     private lateinit var editSearch: EditText
     private lateinit var prefs: SharedPreferences
 
@@ -43,6 +47,10 @@ class MainActivity : AppCompatActivity() {
     private var searchQuery: String = ""
     private var activeCategory: String? = null
 
+    // Executor per la scansione in background
+    private val executor = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -55,6 +63,7 @@ class MainActivity : AppCompatActivity() {
         recycler = findViewById(R.id.recyclerFiles)
         txtPath = findViewById(R.id.txtPath)
         txtInternalInfo = findViewById(R.id.txtInternalInfo)
+        txtSort = findViewById(R.id.txtSort)
         editSearch = findViewById(R.id.editSearch)
 
         editSearch.addTextChangedListener(object : TextWatcher {
@@ -68,13 +77,15 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<ImageButton>(R.id.btnBack).setOnClickListener { goBack() }
         findViewById<ImageButton>(R.id.btnAddFolder).setOnClickListener { createFolder() }
-        findViewById<ImageButton>(R.id.btnSort).setOnClickListener { showSortDialog() }
+        findViewById<LinearLayout>(R.id.btnSort).setOnClickListener { showSortDialog() }
         findViewById<ImageButton>(R.id.btnViewToggle).setOnClickListener { toggleView() }
         findViewById<ImageButton>(R.id.btnSettings).setOnClickListener { showSettingsDialog() }
 
-        // Card memoria → torna alla root interna
         findViewById<LinearLayout>(R.id.storageCard).setOnClickListener {
-            loadDirectory(ROOT_INTERNAL)
+            activeCategory = null
+            searchQuery = ""
+            editSearch.setText("")
+            loadDirectory(ROOT_INTERNAL, resetCategory = true)
         }
 
         findViewById<LinearLayout>(R.id.catImages).setOnClickListener { setCategory("images") }
@@ -83,6 +94,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<LinearLayout>(R.id.catDocs).setOnClickListener { setCategory("documents") }
 
         updateStorageInfo()
+        updateSortLabel()
 
         if (hasStoragePermission()) {
             loadDirectory(currentPath)
@@ -96,6 +108,11 @@ class MainActivity : AppCompatActivity() {
         if (hasStoragePermission()) {
             loadDirectory(currentPath)
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        executor.shutdown()
     }
 
     // ---------- PERMESSI ----------
@@ -145,10 +162,8 @@ class MainActivity : AppCompatActivity() {
             val totalBytes = stat.blockCountLong * stat.blockSizeLong
             val freeBytes = stat.availableBlocksLong * stat.blockSizeLong
             val usedBytes = totalBytes - freeBytes
-
             val totalGb = totalBytes / (1024.0 * 1024.0 * 1024.0)
             val usedGb = usedBytes / (1024.0 * 1024.0 * 1024.0)
-
             txtInternalInfo.text = String.format("%.1f GB / %.1f GB", usedGb, totalGb)
         } catch (e: Exception) {
             txtInternalInfo.text = "Info non disponibili"
@@ -156,37 +171,44 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ---------- LETTURA ----------
-    private fun loadDirectory(path: String) {
+    private fun loadDirectory(path: String, resetCategory: Boolean = false) {
         currentPath = path
         txtPath.text = path
-        // NON resettiamo activeCategory qui, così il filtro resta anche cambiando cartella
-
-        val dir = File(path)
-        if (!dir.exists() || !dir.isDirectory) {
-            Toast.makeText(this, "Cartella non accessibile", Toast.LENGTH_SHORT).show()
-            return
+        if (resetCategory) {
+            activeCategory = null
+            searchQuery = ""
         }
 
-        val files = dir.listFiles()
-        if (files == null) {
-            Toast.makeText(this, "Permesso negato", Toast.LENGTH_SHORT).show()
-            return
+        executor.execute {
+            val dir = File(path)
+            val result = if (!dir.exists() || !dir.isDirectory) {
+                null
+            } else {
+                val files = dir.listFiles()
+                if (files == null) null else {
+                    val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
+                    filtered.map { f ->
+                        FileItem(
+                            file = f,
+                            name = f.name,
+                            path = f.absolutePath,
+                            isDirectory = f.isDirectory,
+                            size = if (f.isFile) f.length() else 0L,
+                            lastModified = f.lastModified()
+                        )
+                    }
+                }
+            }
+
+            mainHandler.post {
+                if (result == null) {
+                    Toast.makeText(this, "Cartella non accessibile o permesso negato", Toast.LENGTH_SHORT).show()
+                    return@post
+                }
+                allItems = result
+                applyFilters()
+            }
         }
-
-        val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
-
-        allItems = filtered.map { f ->
-            FileItem(
-                file = f,
-                name = f.name,
-                path = f.absolutePath,
-                isDirectory = f.isDirectory,
-                size = if (f.isFile) f.length() else 0L,
-                lastModified = f.lastModified()
-            )
-        }
-
-        applyFilters()
     }
 
     private fun applyFilters() {
@@ -225,16 +247,61 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Categorie: attiva/disattiva filtro. Se cambio categoria, ricarico la ROOT
+    // ---------- CATEGORIE (ricorsive, in background) ----------
     private fun setCategory(cat: String) {
         if (activeCategory == cat) {
-            // Disattiva
             activeCategory = null
-        } else {
-            activeCategory = cat
+            loadDirectory(ROOT_INTERNAL, resetCategory = true)
+            return
         }
-        // Applica il filtro su TUTTA la root (non sulla cartella corrente)
-        applyFilters()
+
+        activeCategory = cat
+        txtPath.text = "Filtro: $cat"
+        recycler.adapter = FileAdapter(emptyList(), isGrid, {}, {})
+        Toast.makeText(this, "Ricerca in corso...", Toast.LENGTH_SHORT).show()
+
+        executor.execute {
+            val found = mutableListOf<FileItem>()
+            try {
+                scanRecursive(File(ROOT_INTERNAL), found, cat, 0)
+            } catch (_: Exception) {}
+
+            val sorted = when (sortBy) {
+                "size" -> found.sortedByDescending { it.size }
+                "date" -> found.sortedByDescending { it.lastModified }
+                else -> found.sortedBy { it.name.lowercase() }
+            }
+
+            mainHandler.post {
+                displayedItems = sorted
+                renderList()
+            }
+        }
+    }
+
+    private fun scanRecursive(dir: File, out: MutableList<FileItem>, cat: String, depth: Int) {
+        if (depth > 8) return
+        val files = dir.listFiles() ?: return
+        for (f in files) {
+            val name = f.name
+            if (!showHidden && name.startsWith(".")) continue
+            if (f.isDirectory) {
+                scanRecursive(f, out, cat, depth + 1)
+            } else {
+                if (categoryFor(name) == cat) {
+                    out.add(
+                        FileItem(
+                            file = f,
+                            name = name,
+                            path = f.absolutePath,
+                            isDirectory = false,
+                            size = f.length(),
+                            lastModified = f.lastModified()
+                        )
+                    )
+                }
+            }
+        }
     }
 
     // ---------- RENDER ----------
@@ -263,12 +330,7 @@ class MainActivity : AppCompatActivity() {
         val savedPackage = prefs.getString("app_for_$mimeType", null)
 
         try {
-            val uri = FileProvider.getUriForFile(
-                this,
-                "$packageName.provider",
-                item.file
-            )
-
+            val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, mimeType)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -292,24 +354,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun showAppChooser(intent: Intent, mimeType: String) {
         val chooser = Intent.createChooser(intent, "Apri con...")
-
         val receiverIntent = Intent(this, AppChooserReceiver::class.java).apply {
             putExtra("mime_type", mimeType)
         }
-
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
         } else {
             PendingIntent.FLAG_UPDATE_CURRENT
         }
-
-        val pendingIntent = PendingIntent.getBroadcast(
-            this,
-            mimeType.hashCode(),
-            receiverIntent,
-            flags
-        )
-
+        val pendingIntent = PendingIntent.getBroadcast(this, mimeType.hashCode(), receiverIntent, flags)
         chooser.putExtra(Intent.EXTRA_CHOSEN_COMPONENT, pendingIntent)
         startActivity(chooser)
     }
@@ -317,17 +370,11 @@ class MainActivity : AppCompatActivity() {
     private fun openFileWithPicker(item: FileItem) {
         val mimeType = getMimeType(item.name)
         try {
-            val uri = FileProvider.getUriForFile(
-                this,
-                "$packageName.provider",
-                item.file
-            )
-
+            val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, mimeType)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-
             prefs.edit().remove("app_for_$mimeType").apply()
             showAppChooser(intent, mimeType)
         } catch (e: Exception) {
@@ -372,13 +419,7 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- MENU CONTESTUALE ----------
     private fun showItemMenu(item: FileItem) {
-        val options = arrayOf(
-            "Apri",
-            "Apri con...",
-            "Rinomina",
-            "Elimina",
-            "Proprietà"
-        )
+        val options = arrayOf("Apri", "Apri con...", "Rinomina", "Elimina", "Proprietà")
         AlertDialog.Builder(this)
             .setTitle(item.name)
             .setItems(options) { _, which ->
@@ -420,8 +461,7 @@ class MainActivity : AppCompatActivity() {
             .setMessage("Eliminare \"${item.name}\"?")
             .setPositiveButton("Elimina") { _, _ ->
                 try {
-                    val ok = if (item.isDirectory) item.file.deleteRecursively()
-                             else item.file.delete()
+                    val ok = if (item.isDirectory) item.file.deleteRecursively() else item.file.delete()
                     if (ok) loadDirectory(currentPath)
                     else Toast.makeText(this, "Impossibile eliminare", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
@@ -483,10 +523,20 @@ class MainActivity : AppCompatActivity() {
                     else -> "name"
                 }
                 prefs.edit().putString("sort_by", sortBy).apply()
+                updateSortLabel()
                 applyFilters()
                 dialog.dismiss()
             }
             .show()
+    }
+
+    private fun updateSortLabel() {
+        val label = when (sortBy) {
+            "size" -> "Dimensione"
+            "date" -> "Data"
+            else -> "Nome"
+        }
+        txtSort.text = "Ordina per $label"
     }
 
     private fun toggleView() {
@@ -496,9 +546,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSettingsDialog() {
-        val options = arrayOf(
-            if (showHidden) "Nascondi file nascosti" else "Mostra file nascosti"
-        )
+        val options = arrayOf(if (showHidden) "Nascondi file nascosti" else "Mostra file nascosti")
         AlertDialog.Builder(this)
             .setTitle("Impostazioni")
             .setItems(options) { _, which ->
@@ -515,25 +563,4 @@ class MainActivity : AppCompatActivity() {
         if (bytes < 1024) return "$bytes B"
         val kb = bytes / 1024.0
         if (kb < 1024) return String.format("%.1f KB", kb)
-        val mb = kb / 1024.0
-        if (mb < 1024) return String.format("%.1f MB", mb)
-        val gb = mb / 1024.0
-        return String.format("%.1f GB", gb)
-    }
-
-    private fun goBack() {
-        if (currentPath == ROOT_INTERNAL) return
-        val parent = File(currentPath).parent
-        if (parent != null && parent.startsWith(ROOT_INTERNAL)) {
-            loadDirectory(parent)
-        }
-    }
-
-    override fun onBackPressed() {
-        if (currentPath != ROOT_INTERNAL) {
-            goBack()
-        } else {
-            super.onBackPressed()
-        }
-    }
-}
+        val mb
