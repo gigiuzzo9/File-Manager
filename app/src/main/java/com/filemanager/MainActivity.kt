@@ -25,7 +25,6 @@ import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.TypedValue
-import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.BaseAdapter
@@ -55,7 +54,6 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var recycler: RecyclerView
     private lateinit var txtPath: TextView
-    private lateinit var txtInternalInfo: TextView
     private lateinit var txtSort: TextView
     private lateinit var editSearch: EditText
     private lateinit var prefs: SharedPreferences
@@ -153,6 +151,10 @@ class MainActivity : AppCompatActivity() {
         executor.shutdown()
     }
 
+    private fun updatePasteButton() {
+        btnPaste.visibility = if (clipboardPath != null) View.VISIBLE else View.GONE
+    }
+
     // ---------- CARD STORAGE (dinamiche) ----------
 
     private fun updateStorageCards() {
@@ -185,37 +187,36 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        // 2) Volumi esterni (SD, USB) tramite StorageManager
+        // 2) Volumi esterni (SD, USB)
         try {
             val storageManager = getSystemService(STORAGE_SERVICE) as StorageManager
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 val storageVolumes = storageManager.storageVolumes
                 for (vol in storageVolumes) {
-                    if (vol.isPrimary) continue // salta memoria interna (già aggiunta)
+                    if (vol.isPrimary) continue
                     if (vol.isRemovable) {
                         val path = getVolumePath(vol)
                         if (path != null && File(path).exists()) {
-                            val stat = StatFs(path)
-                            val totalBytes = stat.blockCountLong * stat.blockSizeLong
-                            val freeBytes = stat.availableBlocksLong * stat.blockSizeLong
-                            val usedBytes = totalBytes - freeBytes
-
-                            val label = vol.getDescription(this) ?: "Storage esterno"
-                            volumes.add(
-                                StorageVolumeInfo(
-                                    label = label,
-                                    path = path,
-                                    usedBytes = usedBytes,
-                                    totalBytes = totalBytes
+                            try {
+                                val stat = StatFs(path)
+                                val totalBytes = stat.blockCountLong * stat.blockSizeLong
+                                val freeBytes = stat.availableBlocksLong * stat.blockSizeLong
+                                val usedBytes = totalBytes - freeBytes
+                                val label = vol.getDescription(this) ?: "Storage esterno"
+                                volumes.add(
+                                    StorageVolumeInfo(
+                                        label = label,
+                                        path = path,
+                                        usedBytes = usedBytes,
+                                        totalBytes = totalBytes
+                                    )
                                 )
-                            )
+                            } catch (_: Exception) {}
                         }
                     }
                 }
             }
-        } catch (e: Exception) {
-            // ignora
-        }
+        } catch (_: Exception) {}
 
         // Crea una card per ogni volume
         for ((index, vol) in volumes.withIndex()) {
@@ -235,8 +236,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun getVolumePath(vol: StorageVolume): String? {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+ non espone il path diretto
-            // Proviamo a ricavarlo dall'UUID
             try {
                 val uuid = vol.uuid
                 if (uuid != null) {
@@ -267,13 +266,11 @@ class MainActivity : AppCompatActivity() {
         card.isClickable = true
         card.isFocusable = true
 
-        // Sfondo con angoli tondi
         val bg = GradientDrawable()
         bg.setColor(Color.parseColor("#2A2A2A"))
         bg.cornerRadius = 12 * density
         card.background = bg
 
-        // Titolo
         val title = TextView(this)
         title.text = vol.label
         title.setTextColor(Color.WHITE)
@@ -281,7 +278,6 @@ class MainActivity : AppCompatActivity() {
         title.setTypeface(null, android.graphics.Typeface.BOLD)
         card.addView(title)
 
-        // Info GB
         val info = TextView(this)
         if (vol.totalBytes > 0) {
             val usedGb = vol.usedBytes / (1024.0 * 1024.0 * 1024.0)
@@ -295,7 +291,6 @@ class MainActivity : AppCompatActivity() {
         info.setPadding(0, (2 * density).toInt(), 0, 0)
         card.addView(info)
 
-        // Click → naviga
         card.setOnClickListener {
             if (vol.path == rootInternal) {
                 activeCategory = null
@@ -303,7 +298,6 @@ class MainActivity : AppCompatActivity() {
                 editSearch.setText("")
                 loadDirectory(rootInternal, resetCategory = true)
             } else {
-                // Prova ad aprire la SD/USB
                 tryAccessExternalVolume(vol.path)
             }
         }
@@ -321,13 +315,11 @@ class MainActivity : AppCompatActivity() {
 
             val files = dir.listFiles()
             if (files == null) {
-                // Permesso negato → apri SAF per questo volume
                 Toast.makeText(this, "Serve il permesso per accedere a questo volume", Toast.LENGTH_LONG).show()
                 requestSafForPath(path)
                 return
             }
 
-            // Accessibile → naviga
             activeCategory = null
             searchQuery = ""
             editSearch.setText("")
@@ -346,7 +338,6 @@ class MainActivity : AppCompatActivity() {
             }
             startActivityForResult(intent, REQ_SAF)
             pendingSafAction = {
-                // Dopo il permesso, ricarica i volumi
                 updateStorageCards()
                 loadDirectory(path, resetCategory = true)
             }
@@ -1361,7 +1352,6 @@ class MainActivity : AppCompatActivity() {
         if (parent != null && parent.startsWith(rootInternal)) {
             loadDirectory(parent)
         } else if (currentPath.startsWith("/storage/") || currentPath.startsWith("/mnt/")) {
-            // Siamo in un volume esterno → torna alla home
             loadDirectory(rootInternal, resetCategory = true)
         }
     }
