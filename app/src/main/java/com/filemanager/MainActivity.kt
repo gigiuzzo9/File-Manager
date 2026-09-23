@@ -517,9 +517,11 @@ class MainActivity : AppCompatActivity() {
             l.endsWith(".pptx") -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
             l.endsWith(".apk") -> "application/vnd.android.package-archive"
             else -> "*/*"
+            
         }
     }
 
+    // ---------- FINE PARTE 1 ----------
     private fun showItemMenu(item: FileItem) {
         val options = mutableListOf<String>()
         options.add("Apri")
@@ -922,7 +924,7 @@ class MainActivity : AppCompatActivity() {
         txtSort.text = "Ordina per $label"
     }
 
-      private fun toggleView() {
+    private fun toggleView() {
         isGrid = !isGrid
         prefs.edit().putBoolean("is_grid", isGrid).apply()
         renderList()
@@ -981,4 +983,4 @@ class MainActivity : AppCompatActivity() {
             super.onBackPressed()
         }
     }
-}}
+}
