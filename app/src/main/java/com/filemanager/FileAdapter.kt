@@ -9,18 +9,20 @@ import androidx.recyclerview.widget.RecyclerView
 
 class FileAdapter(
     private val items: List<FileItem>,
-    private val onClick: (FileItem) -> Unit
+    private val isGrid: Boolean,
+    private val onClick: (FileItem) -> Unit,
+    private val onLongClick: (FileItem) -> Unit
 ) : RecyclerView.Adapter<FileAdapter.VH>() {
 
     class VH(view: View) : RecyclerView.ViewHolder(view) {
-        val icon: ImageView = view.findViewById(R.id.itemIcon)
+        val icon: ImageView? = view.findViewById(R.id.itemIcon)
         val name: TextView = view.findViewById(R.id.itemName)
-        val meta: TextView = view.findViewById(R.id.itemMeta)
+        val meta: TextView? = view.findViewById(R.id.itemMeta)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
-        val view = LayoutInflater.from(parent.context)
-            .inflate(R.layout.item_file, parent, false)
+        val layoutId = if (isGrid) R.layout.item_file_grid else R.layout.item_file
+        val view = LayoutInflater.from(parent.context).inflate(layoutId, parent, false)
         return VH(view)
     }
 
@@ -28,15 +30,14 @@ class FileAdapter(
         val item = items[position]
         holder.name.text = item.name
 
-        if (item.isDirectory) {
-            holder.icon.setImageResource(R.drawable.folder)
-            holder.meta.text = ""
-        } else {
-            holder.icon.setImageResource(iconForFile(item.name))
-            holder.meta.text = formatSize(item.size)
-        }
+        holder.icon?.setImageResource(if (item.isDirectory) R.drawable.folder else iconForFile(item.name))
+        holder.meta?.text = if (item.isDirectory) "" else formatSize(item.size)
 
         holder.itemView.setOnClickListener { onClick(item) }
+        holder.itemView.setOnLongClickListener {
+            onLongClick(item)
+            true
+        }
     }
 
     override fun getItemCount() = items.size
