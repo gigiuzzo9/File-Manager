@@ -434,7 +434,7 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    // ---------- APERTURA FILE: MEMORIZZAZIONE PER CATEGORIA + CLIPDATA ----------
+    // ---------- APERTURA FILE: MEMORIZZAZIONE PER CATEGORIA ----------
 
     private fun getCategoryKey(mimeType: String): String {
         return when {
@@ -454,8 +454,6 @@ class MainActivity : AppCompatActivity() {
         if (savedPackage != null) {
             if (tryOpenWithPackage(item, savedPackage, mimeType)) {
                 return
-            } else {
-                prefs.edit().remove("app_for_$categoryKey").apply()
             }
         }
 
