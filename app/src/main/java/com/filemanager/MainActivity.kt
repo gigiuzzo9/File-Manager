@@ -878,7 +878,7 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // ---------- COMPRIMI / DECOMPRIMI ----------
+    // ---------- COMPRIMI ----------
 
     private fun comprimiZip(item: FileItem) {
         val zipName = if (item.isDirectory) "${item.name}.zip" else item.name.substringBeforeLast(".") + ".zip"
@@ -987,6 +987,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- DECOMPRIMI ----------
+
     private fun decomprimiZip(item: FileItem) {
         if (!item.name.lowercase().endsWith(".zip")) {
             Toast.makeText(this, "Non è un file ZIP", Toast.LENGTH_SHORT).show()
@@ -1004,19 +1006,49 @@ class MainActivity : AppCompatActivity() {
         }
 
         val baseName = item.name.substringBeforeLast(".")
-        val extractDir = File(currentPath, baseName)
-        if (!extractDir.exists()) {
-            extractDir.mkdirs()
-        }
 
         Toast.makeText(this, "Decompressione in corso...", Toast.LENGTH_SHORT).show()
 
         executor.execute {
-            var ok = false
-            var errorMsg = ""
             var filesExtracted = 0
+            val debugLog = StringBuilder()
 
             try {
+                debugLog.append("ZIP: ${zipSource.name}\n")
+                debugLog.append("ZIP esiste: ${zipSource.exists()}\n")
+                debugLog.append("ZIP size: ${zipSource.length()}\n")
+                debugLog.append("Current path: $currentPath\n")
+                debugLog.append("Root internal: $rootInternal\n")
+                debugLog.append("SAF tree URI: ${if (safTreeUri != null) "OK" else "NULL"}\n\n")
+
+                val parentDoc = getSafDocumentFile(currentPath)
+                debugLog.append("SAF parent doc: ${parentDoc != null} (${parentDoc?.name ?: "null"})\n\n")
+
+                val extractDir = File(currentPath, baseName)
+                if (!extractDir.exists()) {
+                    val created = extractDir.mkdirs()
+                    debugLog.append("mkdirs($baseName): $created\n")
+                } else {
+                    debugLog.append("Cartella esiste già: $baseName\n")
+                }
+
+                // Lettura entries
+                val entries = mutableListOf<String>()
+                ZipInputStream(FileInputStream(zipSource)).use { zis ->
+                    var entry: ZipEntry? = zis.nextEntry
+                    while (entry != null) {
+                        entries.add("${entry.name} (dir=${entry.isDirectory}, size=${entry.size})")
+                        zis.closeEntry()
+                        entry = zis.nextEntry
+                    }
+                }
+
+                debugLog.append("\nEntries nello zip:\n")
+                for (e in entries) {
+                    debugLog.append("  - $e\n")
+                }
+
+                // Estrazione
                 ZipInputStream(FileInputStream(zipSource)).use { zis ->
                     var entry: ZipEntry? = zis.nextEntry
                     while (entry != null) {
@@ -1024,15 +1056,22 @@ class MainActivity : AppCompatActivity() {
                         val outFile = File(extractDir, entryName)
 
                         if (!outFile.canonicalPath.startsWith(extractDir.canonicalPath)) {
+                            debugLog.append("\nSKIP (traversal): $entryName\n")
+                            zis.closeEntry()
                             entry = zis.nextEntry
                             continue
                         }
 
                         if (entry.isDirectory) {
-                            outFile.mkdirs()
+                            val ok = outFile.mkdirs()
+                            debugLog.append("\nDIR: $entryName -> mkdirs=$ok\n")
                         } else {
-                            outFile.parentFile?.mkdirs()
+                            val parentOk = outFile.parentFile?.mkdirs() ?: false
+
                             var written = false
+                            var method = ""
+                            var error = ""
+
                             try {
                                 FileOutputStream(outFile).use { fos ->
                                     val buffer = ByteArray(8192)
@@ -1043,48 +1082,78 @@ class MainActivity : AppCompatActivity() {
                                     fos.flush()
                                 }
                                 written = true
-                            } catch (_: Exception) {}
-
-                            if (!written) {
-                                written = writeFileViaSaf(outFile, zis)
+                                method = "File I/O"
+                            } catch (e: Exception) {
+                                error = e.message ?: e.toString()
                             }
 
-                            if (written) filesExtracted++
+                            if (!written && parentDoc != null) {
+                                val safWritten = tryWriteViaSaf(parentDoc, entryName, zis)
+                                if (safWritten) {
+                                    written = true
+                                    method = "SAF"
+                                }
+                            }
+
+                            if (written) {
+                                filesExtracted++
+                                debugLog.append("\nFILE: $entryName -> OK ($method)\n")
+                            } else {
+                                debugLog.append("\nFILE: $entryName -> FAIL\n")
+                                debugLog.append("  parentOk=$parentOk\n")
+                                debugLog.append("  error=$error\n")
+                            }
                         }
 
                         zis.closeEntry()
                         entry = zis.nextEntry
                     }
                 }
-                ok = true
+
+                debugLog.append("\n\nTOTALE ESTRATTI: $filesExtracted")
+
             } catch (e: Exception) {
-                ok = false
-                errorMsg = e.message ?: e.toString()
+                debugLog.append("\n\nECCEZIONE GENERALE:\n${e.message}\n${e.stackTraceToString().take(500)}")
             }
 
-            if (ok) scanPath(extractDir.absolutePath)
+            if (filesExtracted > 0) {
+                scanPath(File(currentPath, baseName).absolutePath)
+            }
+
+            val logFinal = debugLog.toString()
+            val extracted = filesExtracted
 
             mainHandler.post {
-                if (ok) {
-                    Toast.makeText(this, "Estratti $filesExtracted file in: $baseName/", Toast.LENGTH_SHORT).show()
-                    loadDirectory(currentPath)
-                } else {
-                    AlertDialog.Builder(this)
-                        .setTitle("Errore Decompressione")
-                        .setMessage("File: ${item.name}\n\nErrore:\n$errorMsg")
-                        .setPositiveButton("OK", null)
-                        .show()
-                }
+                AlertDialog.Builder(this)
+                    .setTitle("Debug Decompressione")
+                    .setMessage("Estratti: $extracted\n\n$logFinal")
+                    .setPositiveButton("OK") { _, _ ->
+                        loadDirectory(currentPath)
+                    }
+                    .show()
             }
         }
     }
 
-    private fun writeFileViaSaf(outFile: File, zis: ZipInputStream): Boolean {
+    private fun tryWriteViaSaf(parentDoc: DocumentFile, entryName: String, zis: ZipInputStream): Boolean {
         return try {
-            val parentDir = outFile.parentFile ?: return false
-            val parentDoc = getSafDocumentFile(parentDir.absolutePath) ?: return false
+            val parts = entryName.split("/").filter { it.isNotEmpty() }
+            if (parts.isEmpty()) return false
 
-            val newFile = parentDoc.createFile("application/octet-stream", outFile.name) ?: return false
+            val fileName = parts.last()
+            val folderParts = if (parts.size > 1) parts.dropLast(1) else emptyList()
+
+            var currentDoc = parentDoc
+            for (part in folderParts) {
+                var next = currentDoc.findFile(part)
+                if (next == null) {
+                    next = currentDoc.createDirectory(part)
+                }
+                if (next == null) return false
+                currentDoc = next
+            }
+
+            val newFile = currentDoc.createFile("application/octet-stream", fileName) ?: return false
             val outputStream = contentResolver.openOutputStream(newFile.uri) ?: return false
 
             outputStream.use { fos ->
