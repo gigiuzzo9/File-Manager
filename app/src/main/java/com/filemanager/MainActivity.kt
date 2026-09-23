@@ -17,6 +17,7 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.View
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.LinearLayout
@@ -30,6 +31,8 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
@@ -44,6 +47,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var txtSort: TextView
     private lateinit var editSearch: EditText
     private lateinit var prefs: SharedPreferences
+    private lateinit var btnPaste: ImageButton
 
     private val rootInternal: String
         get() = if (File("/storage/emulated/0").exists()) {
@@ -88,6 +92,7 @@ class MainActivity : AppCompatActivity() {
         txtInternalInfo = findViewById(R.id.txtInternalInfo)
         txtSort = findViewById(R.id.txtSort)
         editSearch = findViewById(R.id.editSearch)
+        btnPaste = findViewById(R.id.btnPaste)
 
         editSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -103,6 +108,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<LinearLayout>(R.id.btnSort).setOnClickListener { showSortDialog() }
         findViewById<ImageButton>(R.id.btnViewToggle).setOnClickListener { toggleView() }
         findViewById<ImageButton>(R.id.btnSettings).setOnClickListener { showSettingsDialog() }
+        btnPaste.setOnClickListener { pasteFromClipboard() }
 
         findViewById<LinearLayout>(R.id.storageCard).setOnClickListener {
             activeCategory = null
@@ -118,6 +124,7 @@ class MainActivity : AppCompatActivity() {
 
         updateStorageInfo()
         updateSortLabel()
+        updatePasteButton()
 
         if (hasStoragePermission()) {
             loadDirectory(currentPath)
@@ -131,11 +138,16 @@ class MainActivity : AppCompatActivity() {
         if (hasStoragePermission()) {
             loadDirectory(currentPath)
         }
+        updatePasteButton()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         executor.shutdown()
+    }
+
+    private fun updatePasteButton() {
+        btnPaste.visibility = if (clipboardPath != null) View.VISIBLE else View.GONE
     }
 
     private fun requestSaf(onGranted: () -> Unit) {
@@ -282,6 +294,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 allItems = result
                 applyFilters()
+                updatePasteButton()
             }
         }
     }
@@ -508,15 +521,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showItemMenu(item: FileItem) {
-        val options = if (item.isDirectory) {
-            arrayOf("Apri", "Copia", "Taglia", "Rinomina", "Elimina", "Proprietà")
-        } else {
-            arrayOf("Apri", "Apri con...", "Condividi", "Copia", "Taglia", "Rinomina", "Elimina", "Proprietà")
-        }
+        val options = mutableListOf<String>()
+        options.add("Apri")
+        if (!item.isDirectory) options.add("Apri con...")
+        if (!item.isDirectory) options.add("Condividi")
+        options.add("Copia")
+        options.add("Taglia")
+        if (clipboardPath != null) options.add("Incolla qui")
+        options.add("Rinomina")
+        options.add("Elimina")
+        options.add("Proprietà")
 
         AlertDialog.Builder(this)
             .setTitle(item.name)
-            .setItems(options) { _, which ->
+            .setItems(options.toTypedArray()) { _, which ->
                 val choice = options[which]
                 when (choice) {
                     "Apri" -> if (item.isDirectory) loadDirectory(item.path) else openFileWithDefault(item)
@@ -525,13 +543,16 @@ class MainActivity : AppCompatActivity() {
                     "Copia" -> {
                         clipboardPath = item.path
                         clipboardAction = "copy"
-                        Toast.makeText(this, "Copiato", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, "Copiato: ${item.name}", Toast.LENGTH_SHORT).show()
+                        updatePasteButton()
                     }
                     "Taglia" -> {
                         clipboardPath = item.path
                         clipboardAction = "cut"
-                        Toast.makeText(this, "Tagliato", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, "Tagliato: ${item.name}", Toast.LENGTH_SHORT).show()
+                        updatePasteButton()
                     }
+                    "Incolla qui" -> pasteFromClipboard()
                     "Rinomina" -> renameItem(item)
                     "Elimina" -> deleteItem(item)
                     "Proprietà" -> showItemInfo(item)
@@ -550,32 +571,71 @@ class MainActivity : AppCompatActivity() {
             }
             startActivity(Intent.createChooser(intent, "Condividi con..."))
         } catch (e: Exception) {
-            Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
     private fun pasteFromClipboard() {
-        val srcPath = clipboardPath ?: run {
+        val srcPath = clipboardPath
+        if (srcPath == null) {
             Toast.makeText(this, "Niente negli appunti", Toast.LENGTH_SHORT).show()
             return
         }
+
         val src = File(srcPath)
         if (!src.exists()) {
-            Toast.makeText(this, "File originale non trovato", Toast.LENGTH_SHORT).show()
+            AlertDialog.Builder(this)
+                .setTitle("Errore Incolla")
+                .setMessage("File originale non trovato:\n$srcPath")
+                .setPositiveButton("OK", null)
+                .show()
+            clipboardPath = null
+            clipboardAction = null
+            updatePasteButton()
             return
         }
 
         val dst = File(currentPath, src.name)
 
+        if (dst.absolutePath == src.absolutePath) {
+            AlertDialog.Builder(this)
+                .setTitle("Errore Incolla")
+                .setMessage("Origine e destinazione coincidono:\n${src.absolutePath}")
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+
+        if (dst.exists()) {
+            AlertDialog.Builder(this)
+                .setTitle("Errore Incolla")
+                .setMessage("Il file esiste già:\n${dst.absolutePath}")
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+
+        val action = clipboardAction
+        Toast.makeText(this, "Copia in corso...", Toast.LENGTH_SHORT).show()
+
         executor.execute {
-            val ok = try {
-                if (src.isDirectory) copyDirectory(src, dst) else src.copyTo(dst, overwrite = false)
-                true
+            var ok = false
+            var errorMsg = ""
+
+            try {
+                if (src.isDirectory) {
+                    copyDirectoryRecursive(src, dst)
+                    ok = true
+                } else {
+                    copyFile(src, dst)
+                    ok = true
+                }
             } catch (e: Exception) {
-                false
+                ok = false
+                errorMsg = e.message ?: e.toString()
             }
 
-            if (ok && clipboardAction == "cut") {
+            if (ok && action == "cut") {
                 try {
                     if (src.isDirectory) src.deleteRecursively() else src.delete()
                 } catch (_: Exception) {}
@@ -585,26 +645,51 @@ class MainActivity : AppCompatActivity() {
 
             mainHandler.post {
                 if (ok) {
-                    Toast.makeText(this, "Incollato", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        this,
+                        if (action == "cut") "Spostato: ${src.name}" else "Copiato: ${src.name}",
+                        Toast.LENGTH_SHORT
+                    ).show()
                     clipboardPath = null
                     clipboardAction = null
+                    updatePasteButton()
                     loadDirectory(currentPath)
                 } else {
-                    Toast.makeText(this, "Errore incolla", Toast.LENGTH_SHORT).show()
+                    AlertDialog.Builder(this)
+                        .setTitle("Errore Incolla")
+                        .setMessage("SRC: ${src.absolutePath}\nDST: ${dst.absolutePath}\n\nErrore:\n$errorMsg")
+                        .setPositiveButton("OK", null)
+                        .show()
                 }
             }
         }
     }
 
-    private fun copyDirectory(src: File, dst: File): Boolean {
+    private fun copyFile(src: File, dst: File) {
+        FileInputStream(src).use { input ->
+            FileOutputStream(dst).use { output ->
+                val buffer = ByteArray(8192)
+                var length: Int
+                while (input.read(buffer).also { length = it } > 0) {
+                    output.write(buffer, 0, length)
+                }
+                output.flush()
+            }
+        }
+        dst.setLastModified(src.lastModified())
+    }
+
+    private fun copyDirectoryRecursive(src: File, dst: File) {
         if (!dst.exists()) dst.mkdirs()
-        val files = src.listFiles() ?: return false
+        val files = src.listFiles() ?: return
         for (f in files) {
             val newFile = File(dst, f.name)
-            if (f.isDirectory) copyDirectory(f, newFile)
-            else f.copyTo(newFile, overwrite = false)
+            if (f.isDirectory) {
+                copyDirectoryRecursive(f, newFile)
+            } else {
+                copyFile(f, newFile)
+            }
         }
-        return true
     }
 
     private fun renameItem(item: FileItem) {
@@ -839,7 +924,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggleView() {
         isGrid = !isGrid
-        prefs.edit().putBoolean("is_grid", isGrid).apply()
+        prefs.edit().putBoolean("is_grid, isGrid).apply()
         renderList()
     }
 
