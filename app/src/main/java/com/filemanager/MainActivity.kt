@@ -1034,14 +1034,16 @@ class MainActivity : AppCompatActivity() {
 
                 // Lettura entries
                 val entries = mutableListOf<String>()
-                ZipInputStream(FileInputStream(zipSource)).use { zis ->
-                    var entry: ZipEntry? = zis.nextEntry
-                    while (entry != null) {
-                        val currentEntry = entry
-                        entries.add("${currentEntry.name} (dir=${currentEntry.isDirectory}, size=${currentEntry.size})")
-                        zis.closeEntry()
-                        entry = zis.nextEntry
+                val zis1 = ZipInputStream(FileInputStream(zipSource))
+                try {
+                    var entry1: ZipEntry? = zis1.nextEntry
+                    while (entry1 != null) {
+                        entries.add("${entry1.name} (dir=${entry1.isDirectory}, size=${entry1.size})")
+                        zis1.closeEntry()
+                        entry1 = zis1.nextEntry
                     }
+                } finally {
+                    zis1.close()
                 }
 
                 debugLog.append("\nEntries nello zip:\n")
@@ -1050,22 +1052,22 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 // Estrazione
-                ZipInputStream(FileInputStream(zipSource)).use { zis ->
-                    var entry: ZipEntry? = zis.nextEntry
-                    while (entry != null) {
-                        val currentEntry = entry
-
-                        val entryName = currentEntry.name
+                val zis2 = ZipInputStream(FileInputStream(zipSource))
+                try {
+                    var entry2: ZipEntry? = zis2.nextEntry
+                    while (entry2 != null) {
+                        val entryName = entry2.name
+                        val isDir = entry2.isDirectory
                         val outFile = File(extractDir, entryName)
 
                         if (!outFile.canonicalPath.startsWith(extractDir.canonicalPath)) {
                             debugLog.append("\nSKIP (traversal): $entryName\n")
-                            zis.closeEntry()
-                            entry = zis.nextEntry
+                            zis2.closeEntry()
+                            entry2 = zis2.nextEntry
                             continue
                         }
 
-                        if (currentEntry.isDirectory) {
+                        if (isDir) {
                             val ok = outFile.mkdirs()
                             debugLog.append("\nDIR: $entryName -> mkdirs=$ok\n")
                         } else {
@@ -1079,7 +1081,7 @@ class MainActivity : AppCompatActivity() {
                                 FileOutputStream(outFile).use { fos ->
                                     val buffer = ByteArray(8192)
                                     var length: Int
-                                    while (zis.read(buffer).also { length = it } > 0) {
+                                    while (zis2.read(buffer).also { length = it } > 0) {
                                         fos.write(buffer, 0, length)
                                     }
                                     fos.flush()
@@ -1091,7 +1093,7 @@ class MainActivity : AppCompatActivity() {
                             }
 
                             if (!written && parentDoc != null) {
-                                val safWritten = tryWriteViaSaf(parentDoc, entryName, zis)
+                                val safWritten = tryWriteViaSaf(parentDoc, entryName, zis2)
                                 if (safWritten) {
                                     written = true
                                     method = "SAF"
@@ -1108,9 +1110,11 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
 
-                        zis.closeEntry()
-                        entry = zis.nextEntry
+                        zis2.closeEntry()
+                        entry2 = zis2.nextEntry
                     }
+                } finally {
+                    zis2.close()
                 }
 
                 debugLog.append("\n\nTOTALE ESTRATTI: $filesExtracted")
