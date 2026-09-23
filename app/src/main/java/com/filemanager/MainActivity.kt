@@ -38,7 +38,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var editSearch: EditText
     private lateinit var prefs: SharedPreferences
 
-    // Path root DINAMICO, letto dal sistema (come Fossify)
+    // Path root DINAMICO
     private val rootInternal: String
         get() = if (File("/storage/emulated/0").exists()) {
             "/storage/emulated/0"
@@ -72,9 +72,6 @@ class MainActivity : AppCompatActivity() {
         sortBy = prefs.getString("sort_by", "name") ?: "name"
 
         currentPath = rootInternal
-
-        // Toast di debug — rimuovi dopo il test
-        Toast.makeText(this, "ROOT: $rootInternal", Toast.LENGTH_LONG).show()
 
         recycler = findViewById(R.id.recyclerFiles)
         txtPath = findViewById(R.id.txtPath)
@@ -598,10 +595,20 @@ class MainActivity : AppCompatActivity() {
                         Toast.makeText(this, "Eliminato", Toast.LENGTH_SHORT).show()
                         loadDirectory(currentPath)
                     } else {
-                        Toast.makeText(this, "Impossibile eliminare", Toast.LENGTH_SHORT).show()
+                        // DEBUG: mostra 5 informazioni sul file
+                        val exists = item.file.exists()
+                        val canRead = item.file.canRead()
+                        val canWrite = item.file.canWrite()
+                        val parentCanWrite = item.file.parentFile?.canWrite() ?: false
+
+                        Toast.makeText(
+                            this,
+                            "Fail!\nexists=$exists\ncanRead=$canRead\ncanWrite=$canWrite\nparentCanWrite=$parentCanWrite",
+                            Toast.LENGTH_LONG
+                        ).show()
                     }
                 } catch (e: Exception) {
-                    Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
             .setNegativeButton("Annulla", null)
