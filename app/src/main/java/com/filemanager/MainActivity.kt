@@ -997,11 +997,7 @@ class MainActivity : AppCompatActivity() {
 
         val zipSource = item.file
         if (!zipSource.exists()) {
-            AlertDialog.Builder(this)
-                .setTitle("Errore Decompressione")
-                .setMessage("File non trovato:\n${item.path}")
-                .setPositiveButton("OK", null)
-                .show()
+            Toast.makeText(this, "File non trovato: ${item.name}", Toast.LENGTH_LONG).show()
             return
         }
 
@@ -1011,133 +1007,90 @@ class MainActivity : AppCompatActivity() {
 
         executor.execute {
             var filesExtracted = 0
-            val debugLog = StringBuilder()
+            var errorMsg = ""
 
             try {
-                debugLog.append("ZIP: ${zipSource.name}\n")
-                debugLog.append("ZIP esiste: ${zipSource.exists()}\n")
-                debugLog.append("ZIP size: ${zipSource.length()}\n")
-                debugLog.append("Current path: $currentPath\n")
-                debugLog.append("Root internal: $rootInternal\n")
-                debugLog.append("SAF tree URI: ${if (safTreeUri != null) "OK" else "NULL"}\n\n")
-
                 val parentDoc = getSafDocumentFile(currentPath)
-                debugLog.append("SAF parent doc: ${parentDoc != null} (${parentDoc?.name ?: "null"})\n\n")
 
                 val extractDir = File(currentPath, baseName)
                 if (!extractDir.exists()) {
-                    val created = extractDir.mkdirs()
-                    debugLog.append("mkdirs($baseName): $created\n")
-                } else {
-                    debugLog.append("Cartella esiste già: $baseName\n")
+                    extractDir.mkdirs()
                 }
 
-                // Lettura entries
-                val entries = mutableListOf<String>()
-                val zis1 = ZipInputStream(FileInputStream(zipSource))
+                val zis = ZipInputStream(FileInputStream(zipSource))
                 try {
-                    var entry1: ZipEntry? = zis1.nextEntry
-                    while (entry1 != null) {
-                        entries.add("${entry1.name} (dir=${entry1.isDirectory}, size=${entry1.size})")
-                        zis1.closeEntry()
-                        entry1 = zis1.nextEntry
-                    }
-                } finally {
-                    zis1.close()
-                }
-
-                debugLog.append("\nEntries nello zip:\n")
-                for (e in entries) {
-                    debugLog.append("  - $e\n")
-                }
-
-                // Estrazione
-                val zis2 = ZipInputStream(FileInputStream(zipSource))
-                try {
-                    var entry2: ZipEntry? = zis2.nextEntry
-                    while (entry2 != null) {
-                        val entryName = entry2.name
-                        val isDir = entry2.isDirectory
+                    var entry: ZipEntry? = zis.nextEntry
+                    while (entry != null) {
+                        val entryName = entry.name
+                        val isDir = entry.isDirectory
                         val outFile = File(extractDir, entryName)
 
                         if (!outFile.canonicalPath.startsWith(extractDir.canonicalPath)) {
-                            debugLog.append("\nSKIP (traversal): $entryName\n")
-                            zis2.closeEntry()
-                            entry2 = zis2.nextEntry
+                            zis.closeEntry()
+                            entry = zis.nextEntry
                             continue
                         }
 
                         if (isDir) {
-                            val ok = outFile.mkdirs()
-                            debugLog.append("\nDIR: $entryName -> mkdirs=$ok\n")
+                            outFile.mkdirs()
                         } else {
-                            val parentOk = outFile.parentFile?.mkdirs() ?: false
+                            outFile.parentFile?.mkdirs()
 
                             var written = false
-                            var method = ""
-                            var error = ""
 
+                            // Tentativo 1: File I/O
                             try {
                                 FileOutputStream(outFile).use { fos ->
                                     val buffer = ByteArray(8192)
                                     var length: Int
-                                    while (zis2.read(buffer).also { length = it } > 0) {
+                                    while (zis.read(buffer).also { length = it } > 0) {
                                         fos.write(buffer, 0, length)
                                     }
                                     fos.flush()
                                 }
                                 written = true
-                                method = "File I/O"
-                            } catch (e: Exception) {
-                                error = e.message ?: e.toString()
-                            }
+                            } catch (_: Exception) {}
 
+                            // Tentativo 2: SAF
                             if (!written && parentDoc != null) {
-                                val safWritten = tryWriteViaSaf(parentDoc, entryName, zis2)
-                                if (safWritten) {
-                                    written = true
-                                    method = "SAF"
-                                }
+                                written = tryWriteViaSaf(parentDoc, entryName, zis)
                             }
 
-                            if (written) {
-                                filesExtracted++
-                                debugLog.append("\nFILE: $entryName -> OK ($method)\n")
-                            } else {
-                                debugLog.append("\nFILE: $entryName -> FAIL\n")
-                                debugLog.append("  parentOk=$parentOk\n")
-                                debugLog.append("  error=$error\n")
-                            }
+                            if (written) filesExtracted++
                         }
 
-                        zis2.closeEntry()
-                        entry2 = zis2.nextEntry
+                        zis.closeEntry()
+                        entry = zis.nextEntry
                     }
                 } finally {
-                    zis2.close()
+                    zis.close()
                 }
-
-                debugLog.append("\n\nTOTALE ESTRATTI: $filesExtracted")
-
             } catch (e: Exception) {
-                debugLog.append("\n\nECCEZIONE GENERALE:\n${e.message}\n${e.stackTraceToString().take(500)}")
+                errorMsg = e.message ?: e.toString()
             }
 
             if (filesExtracted > 0) {
                 scanPath(File(currentPath, baseName).absolutePath)
             }
 
-            val logFinal = debugLog.toString()
             val extracted = filesExtracted
+            val err = errorMsg
 
             mainHandler.post {
-                AlertDialog.Builder(this)
-                    .setTitle("Debug Decompressione")
-                    .setMessage("Estratti: $extracted\n\n$logFinal")
-                    .setPositiveButton("OK") { _, _ ->
-                        loadDirectory(currentPath)
-                    }
-                    .show()
+                if (extracted > 0) {
+                    Toast.makeText(
+                        this,
+                        "Estratti $extracted file in: $baseName/",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    loadDirectory(currentPath)
+                } else {
+                    AlertDialog.Builder(this)
+                        .setTitle("Errore Decompressione")
+                        .setMessage("File: ${item.name}\n\nNessun file estratto.\n$err")
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
             }
         }
     }
