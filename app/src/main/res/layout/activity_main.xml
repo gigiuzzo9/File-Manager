@@ -185,7 +185,7 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- RIGA 4: Aggiungi (sx) | Ordina (centro) | Incolla | Vista (dx) -->
+    <!-- RIGA 4: Aggiungi | Ordina | Incolla | Vista -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -236,7 +236,7 @@
             android:id="@+id/btnPaste"
             android:layout_width="44dp"
             android:layout_height="44dp"
-            android:src="@android:drawable/ic_menu_paste"
+            android:src="@android:drawable/ic_menu_save"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:scaleType="fitCenter"
             android:padding="8dp"
