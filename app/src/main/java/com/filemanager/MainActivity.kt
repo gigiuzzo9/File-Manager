@@ -622,6 +622,7 @@ class MainActivity : AppCompatActivity() {
             var ok = false
             var errorMsg = ""
 
+            // Tentativo 1: File I/O classico
             try {
                 if (src.isDirectory) {
                     copyDirectoryRecursive(src, dst)
@@ -633,6 +634,21 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 ok = false
                 errorMsg = e.message ?: e.toString()
+            }
+
+            // Tentativo 2: SAF
+            if (!ok) {
+                try {
+                    val copiedViaSaf = copyViaSaf(src, dst)
+                    if (copiedViaSaf) {
+                        ok = true
+                        errorMsg = ""
+                    } else {
+                        errorMsg = "SAF: copia fallita"
+                    }
+                } catch (e: Exception) {
+                    errorMsg = "SAF: ${e.message}"
+                }
             }
 
             if (ok && action == "cut") {
@@ -663,6 +679,60 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    private fun copyViaSaf(src: File, dst: File): Boolean {
+        return try {
+            val parentDir = dst.parentFile ?: return false
+            val parentDoc = getSafDocumentFile(parentDir.absolutePath) ?: return false
+
+            if (src.isDirectory) {
+                val newDir = parentDoc.createDirectory(src.name) ?: return false
+                return copyDirViaSaf(src, newDir)
+            } else {
+                val mimeType = getMimeType(src.name)
+                val newFile = parentDoc.createFile(mimeType, src.name) ?: return false
+                contentResolver.openOutputStream(newFile.uri)?.use { output ->
+                    FileInputStream(src).use { input ->
+                        val buffer = ByteArray(8192)
+                        var length: Int
+                        while (input.read(buffer).also { length = it } > 0) {
+                            output.write(buffer, 0, length)
+                        }
+                        output.flush()
+                    }
+                } ?: return false
+                return true
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun copyDirViaSaf(src: File, dstDoc: DocumentFile): Boolean {
+        val files = src.listFiles() ?: return false
+        for (f in files) {
+            if (f.isDirectory) {
+                val newDir = dstDoc.createDirectory(f.name) ?: continue
+                copyDirViaSaf(f, newDir)
+            } else {
+                val mimeType = getMimeType(f.name)
+                val newFile = dstDoc.createFile(mimeType, f.name) ?: continue
+                try {
+                    contentResolver.openOutputStream(newFile.uri)?.use { output ->
+                        FileInputStream(f).use { input ->
+                            val buffer = ByteArray(8192)
+                            var length: Int
+                            while (input.read(buffer).also { length = it } > 0) {
+                                output.write(buffer, 0, length)
+                            }
+                            output.flush()
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+        return true
     }
 
     private fun copyFile(src: File, dst: File) {
