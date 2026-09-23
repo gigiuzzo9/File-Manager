@@ -21,7 +21,6 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
-import androidx.documentfile.provider.DocumentFile
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -48,9 +47,8 @@ class MainActivity : AppCompatActivity() {
     private var searchQuery: String = ""
     private var activeCategory: String? = null
 
-    // Clipboard per copia/taglia
     private var clipboardPath: String? = null
-    private var clipboardAction: String? = null // "copy" o "cut"
+    private var clipboardAction: String? = null
 
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -119,7 +117,6 @@ class MainActivity : AppCompatActivity() {
         executor.shutdown()
     }
 
-    // ---------- PERMESSI ----------
     private fun hasStoragePermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             Environment.isExternalStorageManager()
@@ -141,10 +138,7 @@ class MainActivity : AppCompatActivity() {
             }
             Toast.makeText(this, "Attiva \"Gestisci tutti i file\"", Toast.LENGTH_LONG).show()
         } else {
-            requestPermissions(
-                arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE),
-                100
-            )
+            requestPermissions(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE), 100)
         }
     }
 
@@ -159,7 +153,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- MEMORIA ----------
     private fun updateStorageInfo() {
         try {
             val stat = StatFs(Environment.getExternalStorageDirectory().path)
@@ -174,7 +167,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- LETTURA ----------
     private fun loadDirectory(path: String, resetCategory: Boolean = false) {
         currentPath = path
         txtPath.text = path
@@ -251,7 +243,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Estensioni "documento utente" — escluse quelle di sistema
     private fun isDocumentFile(name: String): Boolean {
         val l = name.lowercase()
         val docExts = listOf(
@@ -263,7 +254,6 @@ class MainActivity : AppCompatActivity() {
         return docExts.any { l.endsWith(it) }
     }
 
-    // ---------- CATEGORIE (ricorsive) ----------
     private fun setCategory(cat: String) {
         if (activeCategory == cat) {
             activeCategory = null
@@ -296,7 +286,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun scanRecursive(dir: File, out: MutableList<FileItem>, cat: String, depth: Int) {
         if (depth > 8) return
-        // Salta cartelle di sistema
         val dirName = dir.name
         if (dirName == "Android" || dirName == ".trash" || dirName == ".thumbnails") return
 
@@ -307,12 +296,10 @@ class MainActivity : AppCompatActivity() {
             if (f.isDirectory) {
                 scanRecursive(f, out, cat, depth + 1)
             } else {
-                val fileCat = categoryFor(name)
-                // Per "documents", includi SOLO estensioni utente
                 val match = if (cat == "documents") {
                     isDocumentFile(name)
                 } else {
-                    fileCat == cat
+                    categoryFor(name) == cat
                 }
                 if (match) {
                     out.add(
@@ -330,7 +317,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- RENDER ----------
     private fun renderList() {
         recycler.layoutManager = if (isGrid)
             GridLayoutManager(this, 3)
@@ -350,7 +336,6 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    // ---------- APERTURA FILE ----------
     private fun openFileWithDefault(item: FileItem) {
         val mimeType = getMimeType(item.name)
         val savedPackage = prefs.getString("app_for_$mimeType", null)
@@ -443,28 +428,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- MENU CONTESTUALE ----------
     private fun showItemMenu(item: FileItem) {
         val options = if (item.isDirectory) {
-            arrayOf(
-                "Apri",
-                "Copia",
-                "Taglia",
-                "Rinomina",
-                "Elimina",
-                "Proprietà"
-            )
+            arrayOf("Apri", "Copia", "Taglia", "Rinomina", "Elimina", "Proprietà")
         } else {
-            arrayOf(
-                "Apri",
-                "Apri con...",
-                "Condividi",
-                "Copia",
-                "Taglia",
-                "Rinomina",
-                "Elimina",
-                "Proprietà"
-            )
+            arrayOf("Apri", "Apri con...", "Condividi", "Copia", "Taglia", "Rinomina", "Elimina", "Proprietà")
         }
 
         AlertDialog.Builder(this)
@@ -478,12 +446,12 @@ class MainActivity : AppCompatActivity() {
                     "Copia" -> {
                         clipboardPath = item.path
                         clipboardAction = "copy"
-                        Toast.makeText(this, "Copiato: ${item.name}", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, "Copiato", Toast.LENGTH_SHORT).show()
                     }
                     "Taglia" -> {
                         clipboardPath = item.path
                         clipboardAction = "cut"
-                        Toast.makeText(this, "Tagliato: ${item.name}", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, "Tagliato", Toast.LENGTH_SHORT).show()
                     }
                     "Rinomina" -> renameItem(item)
                     "Elimina" -> deleteItem(item)
@@ -492,8 +460,6 @@ class MainActivity : AppCompatActivity() {
             }
             .show()
     }
-
-    // ---------- OPERAZIONI FILE ----------
 
     private fun shareFile(item: FileItem) {
         try {
@@ -505,7 +471,7 @@ class MainActivity : AppCompatActivity() {
             }
             startActivity(Intent.createChooser(intent, "Condividi con..."))
         } catch (e: Exception) {
-            Toast.makeText(this, "Errore condivisione: ${e.message}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -517,7 +483,6 @@ class MainActivity : AppCompatActivity() {
         val src = File(srcPath)
         if (!src.exists()) {
             Toast.makeText(this, "File originale non trovato", Toast.LENGTH_SHORT).show()
-            clipboardPath = null
             return
         }
 
@@ -525,17 +490,12 @@ class MainActivity : AppCompatActivity() {
 
         executor.execute {
             val ok = try {
-                if (src.isDirectory) {
-                    copyDirectory(src, dst)
-                } else {
-                    src.copyTo(dst, overwrite = false)
-                }
+                if (src.isDirectory) copyDirectory(src, dst) else src.copyTo(dst, overwrite = false)
                 true
             } catch (e: Exception) {
                 false
             }
 
-            // Se era "cut", elimina l'originale
             if (ok && clipboardAction == "cut") {
                 try {
                     if (src.isDirectory) src.deleteRecursively() else src.delete()
@@ -560,11 +520,8 @@ class MainActivity : AppCompatActivity() {
         val files = src.listFiles() ?: return false
         for (f in files) {
             val newFile = File(dst, f.name)
-            if (f.isDirectory) {
-                copyDirectory(f, newFile)
-            } else {
-                f.copyTo(newFile, overwrite = false)
-            }
+            if (f.isDirectory) copyDirectory(f, newFile)
+            else f.copyTo(newFile, overwrite = false)
         }
         return true
     }
@@ -579,31 +536,18 @@ class MainActivity : AppCompatActivity() {
                 val newName = input.text.toString().trim()
                 if (newName.isEmpty() || newName == item.name) return@setPositiveButton
 
-                executor.execute {
-                    var ok = false
-                    try {
-                        val oldFile = item.file
-                        val parent = oldFile.parentFile ?: return@execute
-                        // Usa DocumentFile per Android 11+
-                        val doc = DocumentFile.fromFile(oldFile)
-                        ok = doc.renameTo(newName)
-                        if (!ok) {
-                            // Fallback: renameTo diretto
-                            val newFile = File(parent, newName)
-                            ok = oldFile.renameTo(newFile)
-                        }
-                    } catch (e: Exception) {
-                        ok = false
+                try {
+                    val parent = item.file.parentFile ?: return@setPositiveButton
+                    val newFile = File(parent, newName)
+                    val ok = item.file.renameTo(newFile)
+                    if (ok) {
+                        Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
+                        loadDirectory(currentPath)
+                    } else {
+                        Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
                     }
-
-                    mainHandler.post {
-                        if (ok) {
-                            Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
-                            loadDirectory(currentPath)
-                        } else {
-                            Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
-                        }
-                    }
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
             }
             .setNegativeButton("Annulla", null)
@@ -615,27 +559,16 @@ class MainActivity : AppCompatActivity() {
             .setTitle("Elimina")
             .setMessage("Eliminare \"${item.name}\"?")
             .setPositiveButton("Elimina") { _, _ ->
-                executor.execute {
-                    var ok = false
-                    try {
-                        val doc = DocumentFile.fromFile(item.file)
-                        ok = doc.delete()
-                        if (!ok) {
-                            // Fallback: delete diretto
-                            ok = if (item.isDirectory) item.file.deleteRecursively() else item.file.delete()
-                        }
-                    } catch (e: Exception) {
-                        ok = false
+                try {
+                    val ok = if (item.isDirectory) item.file.deleteRecursively() else item.file.delete()
+                    if (ok) {
+                        Toast.makeText(this, "Eliminato", Toast.LENGTH_SHORT).show()
+                        loadDirectory(currentPath)
+                    } else {
+                        Toast.makeText(this, "Impossibile eliminare", Toast.LENGTH_SHORT).show()
                     }
-
-                    mainHandler.post {
-                        if (ok) {
-                            Toast.makeText(this, "Eliminato", Toast.LENGTH_SHORT).show()
-                            loadDirectory(currentPath)
-                        } else {
-                            Toast.makeText(this, "Impossibile eliminare", Toast.LENGTH_SHORT).show()
-                        }
-                    }
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
             }
             .setNegativeButton("Annulla", null)
@@ -655,7 +588,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // ---------- AZIONI ----------
     private fun createFolder() {
         val input = EditText(this)
         input.hint = "Nome cartella"
@@ -667,30 +599,17 @@ class MainActivity : AppCompatActivity() {
                 val name = input.text.toString().trim()
                 if (name.isEmpty()) return@setPositiveButton
 
-                executor.execute {
-                    var ok = false
-                    try {
-                        // Prova con DocumentFile (funziona su Android 11+)
-                        val parentDoc = DocumentFile.fromFile(File(currentPath))
-                        val newDoc = parentDoc.createDirectory(name)
-                        ok = newDoc != null
-                        if (!ok) {
-                            // Fallback: mkdir diretto
-                            val newDir = File(currentPath, name)
-                            ok = newDir.mkdir()
-                        }
-                    } catch (e: Exception) {
-                        ok = false
+                try {
+                    val newDir = File(currentPath, name)
+                    val ok = newDir.mkdir()
+                    if (ok) {
+                        Toast.makeText(this, "Cartella creata", Toast.LENGTH_SHORT).show()
+                        loadDirectory(currentPath)
+                    } else {
+                        Toast.makeText(this, "Impossibile creare", Toast.LENGTH_SHORT).show()
                     }
-
-                    mainHandler.post {
-                        if (ok) {
-                            Toast.makeText(this, "Cartella creata", Toast.LENGTH_SHORT).show()
-                            loadDirectory(currentPath)
-                        } else {
-                            Toast.makeText(this, "Impossibile creare: permesso negato da Android in questa cartella", Toast.LENGTH_LONG).show()
-                        }
-                    }
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
             }
             .setNegativeButton("Annulla", null)
@@ -736,13 +655,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSettingsDialog() {
-        val options = arrayOf(
-            if (showHidden) "Nascondi file nascosti" else "Mostra file nascosti",
-            if (clipboardPath != null) "Incolla qui" else "Niente negli appunti"
-        )
+        val options = mutableListOf<String>()
+        options.add(if (showHidden) "Nascondi file nascosti" else "Mostra file nascosti")
+        if (clipboardPath != null) options.add("Incolla qui")
+
         AlertDialog.Builder(this)
             .setTitle("Impostazioni")
-            .setItems(options) { _, which ->
+            .setItems(options.toTypedArray()) { _, which ->
                 if (which == 0) {
                     showHidden = !showHidden
                     prefs.edit().putBoolean("show_hidden", showHidden).apply()
