@@ -20,12 +20,6 @@ const Map<String, String> ICON_PATHS = {
   'grid':       'assets/icons/grid.png',
 };
 
-// Icone che devono seguire il tema (monocolore)
-const Set<String> THEMED_ICONS = {
-  'folder', 'folderAdd', 'search', 'settings', 'list', 'grid',
-};
-
-// Widget icona riusabile
 class AppIcon extends StatelessWidget {
   final String name;
   final double size;
@@ -35,25 +29,20 @@ class AppIcon extends StatelessWidget {
   Widget build(BuildContext context) {
     final path = ICON_PATHS[name];
     if (path == null) return SizedBox(width: size, height: size);
-
-    final isThemed = THEMED_ICONS.contains(name);
-    final brightness = Theme.of(context).brightness;
-
-    Widget img = Image.asset(path, width: size, height: size);
-
-    if (isThemed) {
-      // Applica filtro colore per adattare al tema
-      final color = brightness == Brightness.dark ? Colors.white : Colors.black;
-      img = ColorFiltered(
-        colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
-        child: img,
-      );
-    }
-
-    return img;
+    return Image.asset(
+      path,
+      width: size,
+      height: size,
+      errorBuilder: (_, __, ___) => Icon(
+        Icons.broken_image,
+        size: size,
+        color: Colors.grey,
+      ),
+    );
   }
 }
 
+// ---------- APP ----------
 class FileManagerApp extends StatelessWidget {
   const FileManagerApp({super.key});
 
@@ -78,6 +67,7 @@ class FileManagerApp extends StatelessWidget {
   }
 }
 
+// ---------- HOME ----------
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -85,8 +75,10 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
-  String currentPath = '/storage/emulated/0';
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  static const String ROOT = '/storage/emulated/0';
+
+  String currentPath = ROOT;
   List<FileSystemEntity> items = [];
   bool hasPermission = false;
   bool isGridView = false;
@@ -94,17 +86,43 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    _checkPermission();
+    WidgetsBinding.instance.addObserver(this);
+    // Aspetta un attimo per far montare la UI, poi chiedi i permessi
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkPermission();
+    });
   }
 
-  Future<void> _checkPermission() async {
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // Quando l'utente torna dall'app impostazioni, ricontrolla
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkPermission(silent: true);
+    }
+  }
+
+  Future<void> _checkPermission({bool silent = false}) async {
+    // 1) Controlla se il permesso è già concesso
     var status = await Permission.manageExternalStorage.status;
-    if (!status.isGranted) {
+
+    // 2) Se non è concesso, chiedilo
+    if (!status.isGranted && !silent) {
       status = await Permission.manageExternalStorage.request();
     }
-    await Permission.photos.request();
-    await Permission.videos.request();
-    await Permission.audio.request();
+
+    // 3) Se ancora negato, apri le impostazioni di sistema
+    if (!status.isGranted && !silent) {
+      await openAppSettings();
+    }
+
+    // 4) Controlla di nuovo dopo essere tornati dalle impostazioni
+    status = await Permission.manageExternalStorage.status;
 
     if (status.isGranted) {
       setState(() => hasPermission = true);
@@ -123,8 +141,7 @@ class _HomePageState extends State<HomePage> {
         final bIsDir = b is Directory;
         if (aIsDir && !bIsDir) return -1;
         if (!aIsDir && bIsDir) return 1;
-        return a.path.split('/').last
-            .toLowerCase()
+        return a.path.split('/').last.toLowerCase()
             .compareTo(b.path.split('/').last.toLowerCase());
       });
       setState(() {
@@ -141,16 +158,16 @@ class _HomePageState extends State<HomePage> {
   String _iconFor(FileSystemEntity item) {
     if (item is Directory) return 'folder';
     final name = item.path.toLowerCase();
-    if (name.endsWith('.jpg') || name.endsWith('.png') || name.endsWith('.jpeg')
-        || name.endsWith('.gif') || name.endsWith('.webp')) {
+    if (name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.png')
+        || name.endsWith('.gif') || name.endsWith('.webp') || name.endsWith('.bmp')) {
       return 'images';
     }
     if (name.endsWith('.mp4') || name.endsWith('.mkv') || name.endsWith('.avi')
-        || name.endsWith('.mov')) {
+        || name.endsWith('.mov') || name.endsWith('.webm') || name.endsWith('.3gp')) {
       return 'video';
     }
     if (name.endsWith('.mp3') || name.endsWith('.wav') || name.endsWith('.ogg')
-        || name.endsWith('.flac') || name.endsWith('.m4a')) {
+        || name.endsWith('.flac') || name.endsWith('.m4a') || name.endsWith('.aac')) {
       return 'audio';
     }
     return 'documents';
@@ -166,10 +183,20 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _goBack() {
-    if (currentPath == '/storage/emulated/0') return;
+    if (currentPath == ROOT) return;
     final parent = currentPath.substring(0, currentPath.lastIndexOf('/'));
-    if (parent.length < '/storage/emulated/0'.length) return;
+    if (parent.length < ROOT.length) return;
     _loadDirectory(parent);
+  }
+
+  void _onItemTap(FileSystemEntity item, String name, bool isDir) {
+    if (isDir) {
+      _loadDirectory(item.path);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Apro: $name')),
+      );
+    }
   }
 
   @override
@@ -188,28 +215,59 @@ class _HomePageState extends State<HomePage> {
         ),
         actions: [
           IconButton(
-            icon: AppIcon(isGridView ? 'list' : 'grid', size: 24),
+            icon: Icon(isGridView ? Icons.view_list : Icons.grid_view),
             onPressed: () => setState(() => isGridView = !isGridView),
           ),
         ],
       ),
       body: !hasPermission
-          ? const Center(
-              child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Text(
-                  'Permesso "Gestisci tutti i file" necessario.\n\n'
-                  'Vai in: Impostazioni → App → File Manager → Autorizzazioni\n'
-                  'e attiva "Gestisci tutti i file".',
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            )
+          ? _buildPermissionScreen()
           : items.isEmpty
               ? const Center(child: Text('Cartella vuota'))
               : isGridView
                   ? _buildGrid()
                   : _buildList(),
+    );
+  }
+
+  Widget _buildPermissionScreen() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.folder_off, size: 64, color: Colors.grey),
+            const SizedBox(height: 24),
+            const Text(
+              'Permesso "Gestisci tutti i file" necessario',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Per leggere i file del dispositivo serve il permesso '
+              '"Gestisci tutti i file".\n\n'
+              'Vai in: Impostazioni → App → File Manager → Autorizzazioni\n'
+              'e attiva "Gestisci tutti i file".',
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: () async {
+                await openAppSettings();
+              },
+              icon: const Icon(Icons.settings),
+              label: const Text('Apri Impostazioni'),
+            ),
+            const SizedBox(height: 12),
+            TextButton(
+              onPressed: () => _checkPermission(),
+              child: const Text('Ho attivato il permesso, ricontrolla'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -270,15 +328,5 @@ class _HomePageState extends State<HomePage> {
         );
       },
     );
-  }
-
-  void _onItemTap(FileSystemEntity item, String name, bool isDir) {
-    if (isDir) {
-      _loadDirectory(item.path);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Apro: $name')),
-      );
-    }
   }
 }
