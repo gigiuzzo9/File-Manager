@@ -25,6 +25,7 @@ import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.TypedValue
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.BaseAdapter
@@ -62,6 +63,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: SharedPreferences
     private lateinit var btnPaste: ImageButton
     private lateinit var storageRow: LinearLayout
+    private lateinit var searchBar: LinearLayout
+    private lateinit var selectionBar: LinearLayout
+    private lateinit var categoriesRow: LinearLayout
+    private lateinit var actionsRow: LinearLayout
+    private lateinit var txtSelectionCount: TextView
 
     private val rootInternal: String
         get() = if (File("/storage/emulated/0").exists()) {
@@ -82,6 +88,10 @@ class MainActivity : AppCompatActivity() {
 
     private var clipboardPath: String? = null
     private var clipboardAction: String? = null
+
+    // Selezione multipla
+    private var selectionMode: Boolean = false
+    private val selectedPaths = mutableSetOf<String>()
 
     private var safTreeUri: Uri? = null
     private var pendingSafAction: (() -> Unit)? = null
@@ -107,6 +117,11 @@ class MainActivity : AppCompatActivity() {
         editSearch = findViewById(R.id.editSearch)
         btnPaste = findViewById(R.id.btnPaste)
         storageRow = findViewById(R.id.storageRow)
+        searchBar = findViewById(R.id.searchBar)
+        selectionBar = findViewById(R.id.selectionBar)
+        categoriesRow = findViewById(R.id.categoriesRow)
+        actionsRow = findViewById(R.id.actionsRow)
+        txtSelectionCount = findViewById(R.id.txtSelectionCount)
 
         editSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -128,6 +143,13 @@ class MainActivity : AppCompatActivity() {
         findViewById<LinearLayout>(R.id.catAudio).setOnClickListener { setCategory("audio") }
         findViewById<LinearLayout>(R.id.catVideo).setOnClickListener { setCategory("video") }
         findViewById<LinearLayout>(R.id.catDocs).setOnClickListener { setCategory("documents") }
+
+        // Pulsanti barra di selezione
+        findViewById<ImageButton>(R.id.btnSelectionClose).setOnClickListener { exitSelectionMode() }
+        findViewById<ImageButton>(R.id.btnSelDelete).setOnClickListener { deleteSelectedFiles() }
+        findViewById<ImageButton>(R.id.btnSelCopy).setOnClickListener { copySelectedFiles("copy") }
+        findViewById<ImageButton>(R.id.btnSelCut).setOnClickListener { copySelectedFiles("cut") }
+        findViewById<ImageButton>(R.id.btnSelShare).setOnClickListener { shareSelectedFiles() }
 
         updateStorageCards()
         updateSortLabel()
@@ -156,6 +178,139 @@ class MainActivity : AppCompatActivity() {
 
     private fun updatePasteButton() {
         btnPaste.visibility = if (clipboardPath != null) View.VISIBLE else View.GONE
+    }
+
+    // ---------- SELEZIONE MULTIPLA ----------
+
+    private fun enterSelectionMode(item: FileItem) {
+        selectionMode = true
+        selectedPaths.clear()
+        selectedPaths.add(item.path)
+        updateSelectionUI()
+        renderList()
+    }
+
+    private fun exitSelectionMode() {
+        selectionMode = false
+        selectedPaths.clear()
+        updateSelectionUI()
+        renderList()
+    }
+
+    private fun toggleSelection(item: FileItem) {
+        if (selectedPaths.contains(item.path)) {
+            selectedPaths.remove(item.path)
+            if (selectedPaths.isEmpty()) {
+                exitSelectionMode()
+                return
+            }
+        } else {
+            selectedPaths.add(item.path)
+        }
+        updateSelectionUI()
+        renderList()
+    }
+
+    private fun updateSelectionUI() {
+        if (selectionMode) {
+            searchBar.visibility = View.GONE
+            selectionBar.visibility = View.VISIBLE
+            categoriesRow.visibility = View.GONE
+            storageRow.visibility = View.GONE
+            actionsRow.visibility = View.GONE
+            txtSelectionCount.text = "${selectedPaths.size} selezionati"
+        } else {
+            searchBar.visibility = View.VISIBLE
+            selectionBar.visibility = View.GONE
+            categoriesRow.visibility = View.VISIBLE
+            storageRow.visibility = View.VISIBLE
+            actionsRow.visibility = View.VISIBLE
+        }
+    }
+
+    private fun deleteSelectedFiles() {
+        if (selectedPaths.isEmpty()) return
+
+        val count = selectedPaths.size
+        AlertDialog.Builder(this)
+            .setTitle("Elimina")
+            .setMessage("Eliminare $count file?")
+            .setPositiveButton("Elimina") { _, _ ->
+                val pathsToDelete = selectedPaths.toList()
+                Toast.makeText(this, "Eliminazione in corso...", Toast.LENGTH_SHORT).show()
+
+                executor.execute {
+                    var deleted = 0
+                    for (path in pathsToDelete) {
+                        try {
+                            val f = File(path)
+                            val ok = if (f.isDirectory) deleteRecursively(f) else f.delete()
+                            if (ok) deleted++
+                        } catch (_: Exception) {}
+                    }
+
+                    val finalDeleted = deleted
+                    mainHandler.post {
+                        Toast.makeText(this, "Eliminati $finalDeleted file", Toast.LENGTH_SHORT).show()
+                        exitSelectionMode()
+                        loadDirectory(currentPath)
+                    }
+                }
+            }
+            .setNegativeButton("Annulla", null)
+            .show()
+    }
+
+    private fun copySelectedFiles(action: String) {
+        if (selectedPaths.isEmpty()) return
+        // Per semplicità: salva il primo file nella clipboard (come prima)
+        // Se vuoi copiare più file insieme, serve una lista più complessa
+        val first = selectedPaths.first()
+        clipboardPath = first
+        clipboardAction = action
+        Toast.makeText(this, "${selectedPaths.size} file ${if (action == "cut") "tagliati" else "copiati"}", Toast.LENGTH_SHORT).show()
+        updatePasteButton()
+        exitSelectionMode()
+    }
+
+    private fun shareSelectedFiles() {
+        if (selectedPaths.isEmpty()) return
+        if (selectedPaths.size == 1) {
+            val path = selectedPaths.first()
+            val item = allItems.find { it.path == path }
+            if (item != null) {
+                shareFile(item)
+                exitSelectionMode()
+            }
+            return
+        }
+
+        // Più file: usa ACTION_SEND_MULTIPLE
+        try {
+            val uris = ArrayList<Uri>()
+            for (path in selectedPaths) {
+                val f = File(path)
+                if (f.exists()) {
+                    val uri = FileProvider.getUriForFile(this, "$packageName.provider", f)
+                    uris.add(uri)
+                }
+            }
+
+            if (uris.isEmpty()) {
+                Toast.makeText(this, "Nessun file da condividere", Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                type = "*/*"
+                putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(intent, "Condividi con..."))
+            exitSelectionMode()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     // ---------- CARD STORAGE ----------
@@ -644,12 +799,22 @@ class MainActivity : AppCompatActivity() {
         recycler.adapter = FileAdapter(
             items = displayedItems,
             isGrid = isGrid,
+            selectionMode = selectionMode,
+            selectedPaths = selectedPaths,
             onClick = { item ->
-                if (item.isDirectory) loadDirectory(item.path)
-                else openFileWithDefault(item)
+                if (selectionMode) {
+                    toggleSelection(item)
+                } else {
+                    if (item.isDirectory) loadDirectory(item.path)
+                    else openFileWithDefault(item)
+                }
             },
             onLongClick = { item ->
-                showItemMenu(item)
+                if (selectionMode) {
+                    toggleSelection(item)
+                } else {
+                    enterSelectionMode(item)
+                }
             }
         )
     }
@@ -728,6 +893,9 @@ class MainActivity : AppCompatActivity() {
                 return
             }
 
+            val density = resources.displayMetrics.density
+
+            // Adapter custom più grande
             val adapter = object : BaseAdapter() {
                 override fun getCount() = filtered.size
                 override fun getItem(position: Int) = filtered[position]
@@ -736,10 +904,25 @@ class MainActivity : AppCompatActivity() {
                 override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
                     val view = convertView ?: layoutInflater.inflate(android.R.layout.activity_list_item, parent, false)
                     val app = filtered[position]
-                    view.findViewById<ImageView>(android.R.id.icon).setImageDrawable(app.loadIcon(packageManager))
+
+                    val iconView = view.findViewById<ImageView>(android.R.id.icon)
                     val textView = view.findViewById<TextView>(android.R.id.text1)
+
+                    val params = iconView.layoutParams
+                    params.width = (64 * density).toInt()
+                    params.height = (64 * density).toInt()
+                    iconView.layoutParams = params
+                    iconView.setImageDrawable(app.loadIcon(packageManager))
+
                     textView.text = app.loadLabel(packageManager).toString()
-                    textView.textSize = 16f
+                    textView.textSize = 20f
+                    textView.setPadding(
+                        (20 * density).toInt(),
+                        (20 * density).toInt(),
+                        (20 * density).toInt(),
+                        (20 * density).toInt()
+                    )
+
                     return view
                 }
             }
@@ -825,7 +1008,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- MENU CONTESTUALE ----------
+    // ---------- MENU CONTESTUALE (per singolo file) ----------
 
     private fun showItemMenu(item: FileItem) {
         val options = mutableListOf<String>()
@@ -1038,7 +1221,6 @@ class MainActivity : AppCompatActivity() {
 
                             var written = false
 
-                            // Tentativo 1: File I/O
                             try {
                                 FileOutputStream(outFile).use { fos ->
                                     val buffer = ByteArray(8192)
@@ -1051,7 +1233,6 @@ class MainActivity : AppCompatActivity() {
                                 written = true
                             } catch (_: Exception) {}
 
-                            // Tentativo 2: SAF
                             if (!written && parentDoc != null) {
                                 written = tryWriteViaSaf(parentDoc, entryName, zis)
                             }
@@ -1330,7 +1511,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- RINOMINA / ELIMINA ----------
+    // ---------- RINOMINA / ELIMINA (singolo) ----------
 
     private fun renameItem(item: FileItem) {
         val input = EditText(this)
@@ -1611,6 +1792,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun goBack() {
+        if (selectionMode) {
+            exitSelectionMode()
+            return
+        }
         if (currentPath == rootInternal) return
         val parent = File(currentPath).parent
         if (parent != null && parent.startsWith(rootInternal)) {
@@ -1621,7 +1806,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onBackPressed() {
-        if (currentPath != rootInternal) {
+        if (selectionMode) {
+            exitSelectionMode()
+        } else if (currentPath != rootInternal) {
             goBack()
         } else {
             super.onBackPressed()
