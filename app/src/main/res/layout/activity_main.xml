@@ -106,7 +106,7 @@
                 android:paddingTop="2dp" />
         </LinearLayout>
 
-        <!-- INCOLLA -->
+        <!-- INCOLLA (dentro selectionBar) -->
         <LinearLayout
             android:id="@+id/btnSelPaste"
             android:layout_width="wrap_content"
@@ -335,6 +335,18 @@
             android:scaleType="fitCenter"
             android:padding="8dp"
             android:contentDescription="Nuova cartella" />
+
+        <!-- INCOLLA (in actionsRow, appare solo quando serve) -->
+        <ImageButton
+            android:id="@+id/btnPaste"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@android:drawable/ic_menu_save"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:scaleType="fitCenter"
+            android:padding="8dp"
+            android:contentDescription="Incolla"
+            android:visibility="gone" />
 
         <LinearLayout
             android:id="@+id/btnSort"
