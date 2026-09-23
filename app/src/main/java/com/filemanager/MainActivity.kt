@@ -1,6 +1,8 @@
 package com.filemanager
 
 import android.app.PendingIntent
+import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
@@ -10,6 +12,8 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.StatFs
+import android.os.storage.StorageManager
+import android.provider.MediaStore
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
@@ -117,6 +121,7 @@ class MainActivity : AppCompatActivity() {
         executor.shutdown()
     }
 
+    // ---------- PERMESSI ----------
     private fun hasStoragePermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             Environment.isExternalStorageManager()
@@ -153,6 +158,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- MEMORIA ----------
     private fun updateStorageInfo() {
         try {
             val stat = StatFs(Environment.getExternalStorageDirectory().path)
@@ -167,6 +173,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- LETTURA ----------
     private fun loadDirectory(path: String, resetCategory: Boolean = false) {
         currentPath = path
         txtPath.text = path
@@ -317,6 +324,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- RENDER ----------
     private fun renderList() {
         recycler.layoutManager = if (isGrid)
             GridLayoutManager(this, 3)
@@ -336,6 +344,7 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    // ---------- APERTURA FILE ----------
     private fun openFileWithDefault(item: FileItem) {
         val mimeType = getMimeType(item.name)
         val savedPackage = prefs.getString("app_for_$mimeType", null)
@@ -428,6 +437,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- MENU CONTESTUALE ----------
     private fun showItemMenu(item: FileItem) {
         val options = if (item.isDirectory) {
             arrayOf("Apri", "Copia", "Taglia", "Rinomina", "Elimina", "Proprietà")
@@ -460,6 +470,8 @@ class MainActivity : AppCompatActivity() {
             }
             .show()
     }
+
+    // ---------- OPERAZIONI FILE (metodo Fossify) ----------
 
     private fun shareFile(item: FileItem) {
         try {
@@ -502,6 +514,10 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: Exception) {}
             }
 
+            if (ok) {
+                scanPath(dst.absolutePath)
+            }
+
             mainHandler.post {
                 if (ok) {
                     Toast.makeText(this, "Incollato", Toast.LENGTH_SHORT).show()
@@ -541,6 +557,9 @@ class MainActivity : AppCompatActivity() {
                     val newFile = File(parent, newName)
                     val ok = item.file.renameTo(newFile)
                     if (ok) {
+                        // Aggiorna MediaStore
+                        updateInMediaStore(item.path, newFile.absolutePath)
+                        scanPath(newFile.absolutePath)
                         Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
                         loadDirectory(currentPath)
                     } else {
@@ -560,8 +579,16 @@ class MainActivity : AppCompatActivity() {
             .setMessage("Eliminare \"${item.name}\"?")
             .setPositiveButton("Elimina") { _, _ ->
                 try {
-                    val ok = if (item.isDirectory) item.file.deleteRecursively() else item.file.delete()
+                    val ok = if (item.isDirectory) {
+                        deleteRecursively(item.file)
+                    } else {
+                        item.file.delete()
+                    }
+
                     if (ok) {
+                        // Rimuovi da MediaStore (fondamentale!)
+                        deleteFromMediaStore(item.path)
+                        scanPath(item.path)
                         Toast.makeText(this, "Eliminato", Toast.LENGTH_SHORT).show()
                         loadDirectory(currentPath)
                     } else {
@@ -573,6 +600,72 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Annulla", null)
             .show()
+    }
+
+    private fun deleteRecursively(file: File): Boolean {
+        if (file.isDirectory) {
+            val children = file.listFiles() ?: return file.delete()
+            for (child in children) {
+                deleteRecursively(child)
+            }
+        }
+        val deleted = file.delete()
+        if (deleted) {
+            deleteFromMediaStore(file.absolutePath)
+        }
+        return deleted
+    }
+
+    // ---------- MEDIASTORE ----------
+
+    private fun deleteFromMediaStore(path: String) {
+        try {
+            val file = File(path)
+            if (file.isDirectory) return
+
+            val uri = getMediaStoreUri(path)
+            val selection = "${MediaStore.MediaColumns.DATA} = ?"
+            val selectionArgs = arrayOf(path)
+            contentResolver.delete(uri, selection, selectionArgs)
+        } catch (_: Exception) {}
+    }
+
+    private fun updateInMediaStore(oldPath: String, newPath: String) {
+        try {
+            val file = File(newPath)
+            if (file.isDirectory) return
+
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DATA, newPath)
+                put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+                put(MediaStore.MediaColumns.TITLE, file.name)
+            }
+            val uri = getMediaStoreUri(oldPath)
+            val selection = "${MediaStore.MediaColumns.DATA} = ?"
+            val selectionArgs = arrayOf(oldPath)
+            contentResolver.update(uri, values, selection, selectionArgs)
+        } catch (_: Exception) {}
+    }
+
+    private fun getMediaStoreUri(path: String): Uri {
+        val l = path.lowercase()
+        return when {
+            l.endsWith(".jpg") || l.endsWith(".jpeg") || l.endsWith(".png") ||
+            l.endsWith(".gif") || l.endsWith(".webp") -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            l.endsWith(".mp4") || l.endsWith(".mkv") || l.endsWith(".avi") ||
+            l.endsWith(".mov") || l.endsWith(".webm") -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            l.endsWith(".mp3") || l.endsWith(".wav") || l.endsWith(".ogg") ||
+            l.endsWith(".flac") || l.endsWith(".m4a") -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+            else -> MediaStore.Files.getContentUri("external")
+        }
+    }
+
+    private fun scanPath(path: String) {
+        try {
+            val intent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
+            intent.data = Uri.fromFile(File(path))
+            sendBroadcast(intent)
+        } catch (_: Exception) {}
     }
 
     private fun showItemInfo(item: FileItem) {
@@ -603,6 +696,7 @@ class MainActivity : AppCompatActivity() {
                     val newDir = File(currentPath, name)
                     val ok = newDir.mkdir()
                     if (ok) {
+                        scanPath(newDir.absolutePath)
                         Toast.makeText(this, "Cartella creata", Toast.LENGTH_SHORT).show()
                         loadDirectory(currentPath)
                     } else {
