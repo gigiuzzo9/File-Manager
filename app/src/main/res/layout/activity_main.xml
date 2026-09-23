@@ -18,9 +18,11 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:hint="Cerca file o cartelle..."
-            android:padding="10dp"
+            android:padding="12dp"
             android:textSize="14sp"
-            android:background="@android:drawable/edit_text"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#AAAAAA"
+            android:background="@drawable/search_background"
             android:maxLines="1"
             android:inputType="text" />
 
@@ -178,35 +180,15 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- RIGA 4: Azioni (path + aggiungi + sort + vista) -->
+    <!-- RIGA 4: Solo aggiungi + ordina + vista -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:paddingStart="8dp"
         android:paddingEnd="8dp"
-        android:paddingBottom="8dp"
-        android:gravity="center_vertical">
-
-        <ImageButton
-            android:id="@+id/btnBack"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:src="@android:drawable/ic_menu_revert"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Indietro" />
-
-        <TextView
-            android:id="@+id/txtPath"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:paddingStart="4dp"
-            android:paddingEnd="4dp"
-            android:text="/storage/emulated/0"
-            android:textSize="12sp"
-            android:maxLines="1"
-            android:ellipsize="start" />
+        android:paddingBottom="4dp"
+        android:gravity="end">
 
         <ImageButton
             android:id="@+id/btnAddFolder"
@@ -235,6 +217,36 @@
             android:scaleType="fitCenter"
             android:padding="6dp"
             android:contentDescription="Vista" />
+    </LinearLayout>
+
+    <!-- RIGA 5: Indietro + path -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:paddingBottom="4dp"
+        android:gravity="center_vertical">
+
+        <ImageButton
+            android:id="@+id/btnBack"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:src="@android:drawable/ic_menu_revert"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Indietro" />
+
+        <TextView
+            android:id="@+id/txtPath"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:paddingStart="4dp"
+            android:text="/storage/emulated/0"
+            android:textSize="12sp"
+            android:maxLines="1"
+            android:ellipsize="start" />
     </LinearLayout>
 
     <!-- LISTA FILE -->
