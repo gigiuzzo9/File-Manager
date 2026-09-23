@@ -182,8 +182,6 @@ class MainActivity : AppCompatActivity() {
     // ---------- PULSANTE INCOLLA IN actionsRow ----------
 
     private fun updatePasteButton() {
-        // Mostra btnPaste in actionsRow solo se NON siamo in selection mode
-        // e c'è qualcosa negli appunti
         val shouldShow = !selectionMode && clipboardPath != null
         btnPaste.visibility = if (shouldShow) View.VISIBLE else View.GONE
     }
@@ -242,6 +240,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- ELIMINA SELEZIONATI (con fallback SAF) ----------
+
     private fun deleteSelectedFiles() {
         if (selectedPaths.isEmpty()) return
 
@@ -260,7 +260,20 @@ class MainActivity : AppCompatActivity() {
                     for (path in pathsToDelete) {
                         try {
                             val f = File(path)
-                            val ok = if (f.isDirectory) deleteRecursively(f) else f.delete()
+
+                            // Tentativo 1: File diretto
+                            var ok = if (f.isDirectory) deleteRecursively(f) else f.delete()
+
+                            // Tentativo 2: fallback SAF
+                            if (!ok) {
+                                val doc = getSafDocumentFile(path)
+                                if (doc != null) {
+                                    ok = try {
+                                        if (doc.isDirectory) deleteDocumentRecursive(doc) else doc.delete()
+                                    } catch (_: Exception) { false }
+                                }
+                            }
+
                             if (ok) deleted++
                         } catch (_: Exception) {}
                     }
@@ -277,6 +290,16 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun deleteDocumentRecursive(doc: DocumentFile): Boolean {
+        if (doc.isDirectory) {
+            val children = doc.listFiles()
+            for (child in children) {
+                deleteDocumentRecursive(child)
+            }
+        }
+        return doc.delete()
+    }
+
     // ---------- COPIA (NON esce dalla selezione) ----------
 
     private fun copySelectedFiles(action: String) {
@@ -289,7 +312,6 @@ class MainActivity : AppCompatActivity() {
             "${selectedPaths.size} file ${if (action == "cut") "tagliati" else "copiati"}",
             Toast.LENGTH_SHORT
         ).show()
-        // NON uscire dalla selezione: aggiorna solo la UI per mostrare il pulsante Incolla
         updateSelectionUI()
     }
 
@@ -396,7 +418,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COMPRIMI MULTI ----------
+    // ---------- COMPRIMI MULTI (con fallback SAF) ----------
 
     private fun comprimiZipSelezioneMultipla() {
         if (selectedPaths.isEmpty()) return
@@ -417,34 +439,47 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, "Compressione in corso...", Toast.LENGTH_SHORT).show()
 
         executor.execute {
-            val zipFile = File(currentPath, finalZipName)
             var ok = false
             var errorMsg = ""
-            var addedCount = 0
 
+            // --- Tentativo 1: SAF ---
             try {
-                ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
-                    for (path in pathsToZip) {
-                        val f = File(path)
-                        if (!f.exists()) continue
-                        if (f.isDirectory) {
-                            addDirectoryToZip(f, f.name, zos)
-                        } else {
-                            addFileToZip(f, f.name, zos)
-                        }
-                        addedCount++
-                    }
-                }
-                ok = addedCount > 0
-                if (!ok) errorMsg = "Nessun file aggiunto"
+                ok = comprimiZipMultiViaSaf(pathsToZip, finalZipName)
+                if (!ok) errorMsg = "SAF: compressione fallita"
             } catch (e: Exception) {
                 ok = false
-                errorMsg = e.message ?: e.toString()
-                try { zipFile.delete() } catch (_: Exception) {}
+                errorMsg = "SAF: ${e.message}"
+            }
+
+            // --- Tentativo 2: File diretto ---
+            if (!ok) {
+                val zipFile = File(currentPath, finalZipName)
+                var addedCount = 0
+                try {
+                    ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
+                        for (path in pathsToZip) {
+                            val f = File(path)
+                            if (!f.exists()) continue
+                            if (f.isDirectory) {
+                                addDirectoryToZip(f, f.name, zos)
+                            } else {
+                                addFileToZip(f, f.name, zos)
+                            }
+                            addedCount++
+                        }
+                    }
+                    ok = addedCount > 0
+                    if (!ok) errorMsg += " | File: nessun file aggiunto"
+                } catch (e: Exception) {
+                    ok = false
+                    errorMsg += " | File: ${e.message}"
+                    try { zipFile.delete() } catch (_: Exception) {}
+                }
             }
 
             if (ok) {
-                scanPath(zipFile.absolutePath)
+                val zip = File(currentPath, finalZipName)
+                scanPath(zip.absolutePath)
             }
 
             mainHandler.post {
@@ -460,6 +495,31 @@ class MainActivity : AppCompatActivity() {
                         .show()
                 }
             }
+        }
+    }
+
+    private fun comprimiZipMultiViaSaf(pathsToZip: List<String>, zipName: String): Boolean {
+        return try {
+            val parentDir = File(currentPath)
+            val parentDoc = getSafDocumentFile(parentDir.absolutePath) ?: return false
+
+            val newZipDoc = parentDoc.createFile("application/zip", zipName) ?: return false
+            val outputStream = contentResolver.openOutputStream(newZipDoc.uri) ?: return false
+
+            ZipOutputStream(outputStream).use { zos ->
+                for (path in pathsToZip) {
+                    val f = File(path)
+                    if (!f.exists()) continue
+                    if (f.isDirectory) {
+                        addDirectoryToZip(f, f.name, zos)
+                    } else {
+                        addFileToZip(f, f.name, zos)
+                    }
+                }
+            }
+            true
+        } catch (e: Exception) {
+            false
         }
     }
 
@@ -1150,7 +1210,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COMPRIMI SINGOLO ----------
+    // ---------- COMPRIMI SINGOLO (con fallback SAF) ----------
 
     private fun comprimiZip(item: FileItem) {
         val zipName = if (item.isDirectory) "${item.name}.zip" else item.name.substringBeforeLast(".") + ".zip"
