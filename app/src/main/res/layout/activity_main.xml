@@ -5,7 +5,7 @@
     android:orientation="vertical"
     android:fitsSystemWindows="true">
 
-    <!-- BARRA RICERCA + IMPOSTAZIONI (visibile normalmente) -->
+    <!-- BARRA RICERCA + IMPOSTAZIONI -->
     <LinearLayout
         android:id="@+id/searchBar"
         android:layout_width="match_parent"
@@ -40,7 +40,7 @@
             android:contentDescription="Impostazioni" />
     </LinearLayout>
 
-    <!-- BARRA SELEZIONE (visibile solo in modalità selezione) -->
+    <!-- BARRA SELEZIONE -->
     <LinearLayout
         android:id="@+id/selectionBar"
         android:layout_width="match_parent"
@@ -83,7 +83,7 @@
             android:id="@+id/btnSelCut"
             android:layout_width="44dp"
             android:layout_height="44dp"
-            android:src="@android:drawable/ic_menu_cut"
+            android:src="@android:drawable/ic_menu_edit"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Taglia" />
 
@@ -104,7 +104,7 @@
             android:contentDescription="Elimina" />
     </LinearLayout>
 
-    <!-- RIGA CATEGORIE (nascosta in modalità selezione) -->
+    <!-- CATEGORIE -->
     <LinearLayout
         android:id="@+id/categoriesRow"
         android:layout_width="match_parent"
@@ -211,7 +211,7 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- RIGA STORAGE -->
+    <!-- STORAGE -->
     <LinearLayout
         android:id="@+id/storageRow"
         android:layout_width="match_parent"
@@ -221,7 +221,7 @@
         android:paddingEnd="8dp"
         android:paddingBottom="8dp" />
 
-    <!-- RIGA AZIONI -->
+    <!-- AZIONI -->
     <LinearLayout
         android:id="@+id/actionsRow"
         android:layout_width="match_parent"
@@ -291,7 +291,7 @@
             android:contentDescription="Vista" />
     </LinearLayout>
 
-    <!-- RIGA PERCORSO -->
+    <!-- PERCORSO -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -321,7 +321,7 @@
             android:ellipsize="start" />
     </LinearLayout>
 
-    <!-- LISTA FILE -->
+    <!-- LISTA -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/recyclerFiles"
         android:layout_width="match_parent"
