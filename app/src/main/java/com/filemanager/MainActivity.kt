@@ -622,32 +622,28 @@ class MainActivity : AppCompatActivity() {
             var ok = false
             var errorMsg = ""
 
-            // Tentativo 1: File I/O classico
+            // Tentativo 1: SAF diretto (funziona su Huawei)
             try {
-                if (src.isDirectory) {
-                    copyDirectoryRecursive(src, dst)
-                    ok = true
-                } else {
-                    copyFile(src, dst)
-                    ok = true
-                }
+                ok = copyViaSaf(src, dst)
+                if (!ok) errorMsg = "SAF: copia fallita"
             } catch (e: Exception) {
                 ok = false
-                errorMsg = e.message ?: e.toString()
+                errorMsg = "SAF: ${e.message}"
             }
 
-            // Tentativo 2: SAF
+            // Tentativo 2: File I/O classico
             if (!ok) {
                 try {
-                    val copiedViaSaf = copyViaSaf(src, dst)
-                    if (copiedViaSaf) {
-                        ok = true
-                        errorMsg = ""
+                    if (src.isDirectory) {
+                        copyDirectoryRecursive(src, dst)
                     } else {
-                        errorMsg = "SAF: copia fallita"
+                        copyFile(src, dst)
                     }
+                    ok = true
+                    errorMsg = ""
                 } catch (e: Exception) {
-                    errorMsg = "SAF: ${e.message}"
+                    ok = false
+                    errorMsg += " | File: ${e.message}"
                 }
             }
 
@@ -688,7 +684,8 @@ class MainActivity : AppCompatActivity() {
 
             if (src.isDirectory) {
                 val newDir = parentDoc.createDirectory(src.name) ?: return false
-                return copyDirViaSaf(src, newDir)
+                copyDirViaSaf(src, newDir)
+                true
             } else {
                 val mimeType = getMimeType(src.name)
                 val newFile = parentDoc.createFile(mimeType, src.name) ?: return false
@@ -702,15 +699,15 @@ class MainActivity : AppCompatActivity() {
                         output.flush()
                     }
                 } ?: return false
-                return true
+                true
             }
         } catch (e: Exception) {
             false
         }
     }
 
-    private fun copyDirViaSaf(src: File, dstDoc: DocumentFile): Boolean {
-        val files = src.listFiles() ?: return false
+    private fun copyDirViaSaf(src: File, dstDoc: DocumentFile) {
+        val files = src.listFiles() ?: return
         for (f in files) {
             if (f.isDirectory) {
                 val newDir = dstDoc.createDirectory(f.name) ?: continue
@@ -732,7 +729,6 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: Exception) {}
             }
         }
-        return true
     }
 
     private fun copyFile(src: File, dst: File) {
