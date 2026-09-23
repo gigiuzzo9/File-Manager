@@ -517,11 +517,9 @@ class MainActivity : AppCompatActivity() {
             l.endsWith(".pptx") -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
             l.endsWith(".apk") -> "application/vnd.android.package-archive"
             else -> "*/*"
-            
         }
     }
 
-    // ---------- FINE PARTE 1 ----------
     private fun showItemMenu(item: FileItem) {
         val options = mutableListOf<String>()
         options.add("Apri")
