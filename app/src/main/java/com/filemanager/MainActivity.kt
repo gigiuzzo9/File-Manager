@@ -69,6 +69,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var txtSelectionCount: TextView
     private lateinit var btnSelPaste: LinearLayout
     private lateinit var btnSelMore: LinearLayout
+    private lateinit var btnPaste: ImageButton
 
     private val rootInternal: String
         get() = if (File("/storage/emulated/0").exists()) {
@@ -123,6 +124,7 @@ class MainActivity : AppCompatActivity() {
         txtSelectionCount = findViewById(R.id.txtSelectionCount)
         btnSelPaste = findViewById(R.id.btnSelPaste)
         btnSelMore = findViewById(R.id.btnSelMore)
+        btnPaste = findViewById(R.id.btnPaste)
 
         editSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -139,6 +141,8 @@ class MainActivity : AppCompatActivity() {
         findViewById<ImageButton>(R.id.btnViewToggle).setOnClickListener { toggleView() }
         findViewById<ImageButton>(R.id.btnSettings).setOnClickListener { showSettingsDialog() }
 
+        btnPaste.setOnClickListener { pasteFromClipboard() }
+
         findViewById<LinearLayout>(R.id.catImages).setOnClickListener { setCategory("images") }
         findViewById<LinearLayout>(R.id.catAudio).setOnClickListener { setCategory("audio") }
         findViewById<LinearLayout>(R.id.catVideo).setOnClickListener { setCategory("video") }
@@ -152,6 +156,7 @@ class MainActivity : AppCompatActivity() {
 
         updateStorageCards()
         updateSortLabel()
+        updatePasteButton()
 
         if (hasStoragePermission()) {
             loadDirectory(currentPath)
@@ -166,11 +171,21 @@ class MainActivity : AppCompatActivity() {
             loadDirectory(currentPath)
         }
         updateStorageCards()
+        updatePasteButton()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         executor.shutdown()
+    }
+
+    // ---------- PULSANTE INCOLLA IN actionsRow ----------
+
+    private fun updatePasteButton() {
+        // Mostra btnPaste in actionsRow solo se NON siamo in selection mode
+        // e c'è qualcosa negli appunti
+        val shouldShow = !selectionMode && clipboardPath != null
+        btnPaste.visibility = if (shouldShow) View.VISIBLE else View.GONE
     }
 
     // ---------- SELEZIONE MULTIPLA ----------
@@ -215,7 +230,6 @@ class MainActivity : AppCompatActivity() {
             val count = selectedPaths.size
             txtSelectionCount.text = if (count == 1) "1 selezionato" else "$count selezionati"
 
-            // Incolla visibile solo se c'è qualcosa negli appunti
             btnSelPaste.visibility = if (clipboardPath != null) View.VISIBLE else View.GONE
         } else {
             searchBar.visibility = View.VISIBLE
@@ -223,6 +237,8 @@ class MainActivity : AppCompatActivity() {
             categoriesRow.visibility = View.VISIBLE
             storageRow.visibility = View.VISIBLE
             actionsRow.visibility = View.VISIBLE
+
+            updatePasteButton()
         }
     }
 
@@ -253,17 +269,15 @@ class MainActivity : AppCompatActivity() {
                     mainHandler.post {
                         Toast.makeText(this, "Eliminati $finalDeleted file", Toast.LENGTH_SHORT).show()
                         exitSelectionMode()
-                        if (currentPath == pathAtStart) {
-                            loadDirectory(currentPath)
-                        } else {
-                            loadDirectory(pathAtStart)
-                        }
+                        loadDirectory(pathAtStart)
                     }
                 }
             }
             .setNegativeButton("Annulla", null)
             .show()
     }
+
+    // ---------- COPIA (NON esce dalla selezione) ----------
 
     private fun copySelectedFiles(action: String) {
         if (selectedPaths.isEmpty()) return
@@ -275,7 +289,8 @@ class MainActivity : AppCompatActivity() {
             "${selectedPaths.size} file ${if (action == "cut") "tagliati" else "copiati"}",
             Toast.LENGTH_SHORT
         ).show()
-        exitSelectionMode()
+        // NON uscire dalla selezione: aggiorna solo la UI per mostrare il pulsante Incolla
+        updateSelectionUI()
     }
 
     // ---------- MENU ⋮ DELLA SELEZIONE ----------
@@ -290,7 +305,6 @@ class MainActivity : AppCompatActivity() {
         popup.menu.add(0, 2, 1, "📤  Condividi")
         popup.menu.add(0, 3, 2, "📦  Comprimi in ZIP")
 
-        // Voci extra solo con 1 file selezionato
         if (count == 1) {
             val path = selectedPaths.first()
             val item = allItems.find { it.path == path }
@@ -392,7 +406,6 @@ class MainActivity : AppCompatActivity() {
         val firstName = File(firstPath).name
         val baseName = if (firstName.contains(".")) firstName.substringBeforeLast(".") else firstName
 
-        // Trova un nome ZIP libero: nome.zip, nome_1.zip, nome_2.zip...
         var zipName = "$baseName.zip"
         var counter = 1
         while (File(currentPath, zipName).exists()) {
@@ -774,6 +787,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 allItems = result
                 applyFilters()
+                updatePasteButton()
             }
         }
     }
@@ -981,12 +995,12 @@ class MainActivity : AppCompatActivity() {
         showCustomAppPicker(item, mimeType, categoryKey)
     }
 
-    private fun tryOpenWithPackage(item: FileItem, packageName: String, mimeType: String): Boolean {
+    private fun tryOpenWithPackage(item: FileItem, pkgName: String, mimeType: String): Boolean {
         return try {
             val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, mimeType)
-                setPackage(packageName)
+                setPackage(pkgName)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 clipData = ClipData.newRawUri("", uri)
@@ -1421,7 +1435,8 @@ class MainActivity : AppCompatActivity() {
                 .show()
             clipboardPath = null
             clipboardAction = null
-            if (selectionMode) updateSelectionUI()
+            exitSelectionMode()
+            updatePasteButton()
             return
         }
 
@@ -1493,6 +1508,7 @@ class MainActivity : AppCompatActivity() {
                     clipboardPath = null
                     clipboardAction = null
                     exitSelectionMode()
+                    updatePasteButton()
                     loadDirectory(currentPath)
                 } else {
                     AlertDialog.Builder(this)
@@ -1586,7 +1602,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- RINOMINA / ELIMINA ----------
+    // ---------- RINOMINA ----------
 
     private fun renameItem(item: FileItem) {
         val input = EditText(this)
