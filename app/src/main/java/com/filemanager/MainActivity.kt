@@ -836,7 +836,6 @@ class MainActivity : AppCompatActivity() {
         options.add("Taglia")
         if (clipboardPath != null) options.add("Incolla qui")
 
-        // Comprimi / Decomprimi
         val isZip = item.name.lowercase().endsWith(".zip")
         if (isZip) {
             options.add("Decomprimi qui")
@@ -883,9 +882,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun comprimiZip(item: FileItem) {
         val zipName = if (item.isDirectory) "${item.name}.zip" else item.name.substringBeforeLast(".") + ".zip"
-        val zipFile = File(currentPath, zipName)
 
-        if (zipFile.exists()) {
+        if (File(currentPath, zipName).exists()) {
             Toast.makeText(this, "Esiste già: $zipName", Toast.LENGTH_LONG).show()
             return
         }
@@ -897,21 +895,36 @@ class MainActivity : AppCompatActivity() {
             var errorMsg = ""
 
             try {
-                ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
-                    if (item.isDirectory) {
-                        addDirectoryToZip(item.file, item.file.name, zos)
-                    } else {
-                        addFileToZip(item.file, item.file.name, zos)
-                    }
-                }
-                ok = true
+                ok = comprimiZipViaSaf(item, zipName)
+                if (!ok) errorMsg = "SAF: compressione fallita"
             } catch (e: Exception) {
                 ok = false
-                errorMsg = e.message ?: e.toString()
-                try { zipFile.delete() } catch (_: Exception) {}
+                errorMsg = "SAF: ${e.message}"
             }
 
-            if (ok) scanPath(zipFile.absolutePath)
+            if (!ok) {
+                val zipFile = File(currentPath, zipName)
+                try {
+                    ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
+                        if (item.isDirectory) {
+                            addDirectoryToZip(item.file, item.file.name, zos)
+                        } else {
+                            addFileToZip(item.file, item.file.name, zos)
+                        }
+                    }
+                    ok = true
+                    errorMsg = ""
+                } catch (e: Exception) {
+                    ok = false
+                    errorMsg += " | File: ${e.message}"
+                    try { zipFile.delete() } catch (_: Exception) {}
+                }
+            }
+
+            if (ok) {
+                val zip = File(currentPath, zipName)
+                scanPath(zip.absolutePath)
+            }
 
             mainHandler.post {
                 if (ok) {
@@ -925,6 +938,27 @@ class MainActivity : AppCompatActivity() {
                         .show()
                 }
             }
+        }
+    }
+
+    private fun comprimiZipViaSaf(item: FileItem, zipName: String): Boolean {
+        return try {
+            val parentDir = File(currentPath)
+            val parentDoc = getSafDocumentFile(parentDir.absolutePath) ?: return false
+
+            val newZipDoc = parentDoc.createFile("application/zip", zipName) ?: return false
+            val outputStream = contentResolver.openOutputStream(newZipDoc.uri) ?: return false
+
+            ZipOutputStream(outputStream).use { zos ->
+                if (item.isDirectory) {
+                    addDirectoryToZip(item.file, item.file.name, zos)
+                } else {
+                    addFileToZip(item.file, item.file.name, zos)
+                }
+            }
+            true
+        } catch (e: Exception) {
+            false
         }
     }
 
@@ -959,9 +993,18 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        val zipSource = item.file
+        if (!zipSource.exists()) {
+            AlertDialog.Builder(this)
+                .setTitle("Errore Decompressione")
+                .setMessage("File non trovato:\n${item.path}")
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+
         val baseName = item.name.substringBeforeLast(".")
         val extractDir = File(currentPath, baseName)
-
         if (!extractDir.exists()) {
             extractDir.mkdirs()
         }
@@ -974,13 +1017,12 @@ class MainActivity : AppCompatActivity() {
             var filesExtracted = 0
 
             try {
-                ZipInputStream(FileInputStream(item.file)).use { zis ->
+                ZipInputStream(FileInputStream(zipSource)).use { zis ->
                     var entry: ZipEntry? = zis.nextEntry
                     while (entry != null) {
                         val entryName = entry.name
                         val outFile = File(extractDir, entryName)
 
-                        // Sicurezza: evita path traversal (../)
                         if (!outFile.canonicalPath.startsWith(extractDir.canonicalPath)) {
                             entry = zis.nextEntry
                             continue
@@ -990,15 +1032,24 @@ class MainActivity : AppCompatActivity() {
                             outFile.mkdirs()
                         } else {
                             outFile.parentFile?.mkdirs()
-                            FileOutputStream(outFile).use { fos ->
-                                val buffer = ByteArray(8192)
-                                var length: Int
-                                while (zis.read(buffer).also { length = it } > 0) {
-                                    fos.write(buffer, 0, length)
+                            var written = false
+                            try {
+                                FileOutputStream(outFile).use { fos ->
+                                    val buffer = ByteArray(8192)
+                                    var length: Int
+                                    while (zis.read(buffer).also { length = it } > 0) {
+                                        fos.write(buffer, 0, length)
+                                    }
+                                    fos.flush()
                                 }
-                                fos.flush()
+                                written = true
+                            } catch (_: Exception) {}
+
+                            if (!written) {
+                                written = writeFileViaSaf(outFile, zis)
                             }
-                            filesExtracted++
+
+                            if (written) filesExtracted++
                         }
 
                         zis.closeEntry()
@@ -1027,6 +1078,30 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
+    private fun writeFileViaSaf(outFile: File, zis: ZipInputStream): Boolean {
+        return try {
+            val parentDir = outFile.parentFile ?: return false
+            val parentDoc = getSafDocumentFile(parentDir.absolutePath) ?: return false
+
+            val newFile = parentDoc.createFile("application/octet-stream", outFile.name) ?: return false
+            val outputStream = contentResolver.openOutputStream(newFile.uri) ?: return false
+
+            outputStream.use { fos ->
+                val buffer = ByteArray(8192)
+                var length: Int
+                while (zis.read(buffer).also { length = it } > 0) {
+                    fos.write(buffer, 0, length)
+                }
+                fos.flush()
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    // ---------- CONDIVIDI ----------
 
     private fun shareFile(item: FileItem) {
         try {
