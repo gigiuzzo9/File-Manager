@@ -81,13 +81,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   String currentPath = ROOT;
   List<FileSystemEntity> items = [];
   bool isGridView = false;
+  bool hasPermission = false;
+  bool showError = false;
+  bool _checkedOnce = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkAndLoad();
+      _checkPermission();
     });
   }
 
@@ -99,28 +102,59 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _checkAndLoad();
+    if (state == AppLifecycleState.resumed && _checkedOnce) {
+      _recheckPermission();
     }
   }
 
-  Future<void> _checkAndLoad() async {
-    // Controlla se il permesso è concesso
-    var status = await Permission.manageExternalStorage.status;
+  Future<void> _checkPermission() async {
+    _checkedOnce = true;
 
-    // Se non è concesso, chiedilo (popup di sistema)
-    if (!status.isGranted) {
-      status = await Permission.manageExternalStorage.request();
-    }
+    // Prova a verificare il permesso
+    final status = await Permission.manageExternalStorage.status;
 
-    // Se ancora negato, apri direttamente le impostazioni Android
-    if (!status.isGranted) {
-      await openAppSettings();
+    if (status.isGranted) {
+      setState(() => hasPermission = true);
+      _loadDirectory(currentPath);
       return;
     }
 
-    // Permesso ok → carica la directory
-    _loadDirectory(currentPath);
+    // Non concesso: prova a chiedere
+    final reqStatus = await Permission.manageExternalStorage.request();
+
+    if (reqStatus.isGranted) {
+      setState(() => hasPermission = true);
+      _loadDirectory(currentPath);
+      return;
+    }
+
+    // Ancora negato: apri la pagina specifica dei permessi
+    setState(() {
+      hasPermission = false;
+      showError = true;
+    });
+
+    // Prova ad aprire direttamente la sezione MANAGE_EXTERNAL_STORAGE
+    await _openManageStorageSettings();
+  }
+
+  Future<void> _recheckPermission() async {
+    final status = await Permission.manageExternalStorage.status;
+    if (status.isGranted) {
+      setState(() {
+        hasPermission = true;
+        showError = false;
+      });
+      _loadDirectory(currentPath);
+    }
+  }
+
+  Future<void> _openManageStorageSettings() async {
+    // Prova ad aprire direttamente la pagina "Gestisci tutti i file"
+    // permission_handler ha openAppSettings() che apre la pagina generale.
+    // Ma c'è un modo per aprire direttamente la sezione storage.
+    // Usiamo il metodo standard, e se non riesce, mostriamo il messaggio.
+    await openAppSettings();
   }
 
   void _loadDirectory(String path) {
@@ -138,6 +172,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       setState(() {
         currentPath = path;
         items = list;
+        hasPermission = true;
+        showError = false;
       });
     } catch (e) {
       setState(() {
@@ -211,11 +247,44 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ),
         ],
       ),
-      body: items.isEmpty
-          ? const Center(child: CircularProgressIndicator())
-          : isGridView
-              ? _buildGrid()
-              : _buildList(),
+      body: !hasPermission
+          ? _buildPermissionScreen()
+          : items.isEmpty
+              ? const Center(child: Text('Cartella vuota'))
+              : isGridView
+                  ? _buildGrid()
+                  : _buildList(),
+    );
+  }
+
+  Widget _buildPermissionScreen() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.folder_off, size: 64, color: Colors.grey),
+            const SizedBox(height: 24),
+            const Text(
+              'Serve il permesso "Gestisci tutti i file"',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Nella pagina che si è aperta, attiva:\n'
+              '"File e media" → "Consenti gestione di tutti i file"',
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: () => _checkPermission(),
+              child: const Text('Riprova'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
