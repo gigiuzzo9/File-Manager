@@ -25,9 +25,35 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Backup file personalizzati
+        run: |
+          mkdir -p /tmp/backup
+          cp pubspec.yaml /tmp/backup/pubspec.yaml
+          cp lib/main.dart /tmp/backup/main.dart
+          cp android/app/src/main/AndroidManifest.xml /tmp/backup/AndroidManifest.xml
+
       - name: Crea progetto Flutter base
         run: |
           flutter create --org com.example --project-name file_manager --platforms=android .
+
+      - name: Ripristina file personalizzati
+        run: |
+          cp /tmp/backup/pubspec.yaml pubspec.yaml
+          cp /tmp/backup/main.dart lib/main.dart
+          cp /tmp/backup/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+
+      - name: Aggiorna Kotlin alla versione 1.9.24
+        run: |
+          # Aggiorna ext.kotlin_version in build.gradle
+          sed -i "s/ext.kotlin_version = .*/ext.kotlin_version = '1.9.24'/" android/build.gradle || true
+          
+          # Aggiorna il plugin Kotlin in settings.gradle
+          sed -i "s/id \"org.jetbrains.kotlin.android\" version \".*\"/id \"org.jetbrains.kotlin.android\" version \"1.9.24\"/" android/settings.gradle || true
+          
+          echo "--- android/build.gradle ---"
+          grep -n "kotlin" android/build.gradle || true
+          echo "--- android/settings.gradle ---"
+          grep -n "kotlin" android/settings.gradle || true
 
       - name: Installa dipendenze
         run: flutter pub get
