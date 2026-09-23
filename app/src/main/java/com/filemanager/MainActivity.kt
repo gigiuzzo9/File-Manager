@@ -65,7 +65,6 @@ class MainActivity : AppCompatActivity() {
     private var clipboardPath: String? = null
     private var clipboardAction: String? = null
 
-    // SAF
     private var safTreeUri: Uri? = null
     private var pendingSafAction: (() -> Unit)? = null
 
@@ -139,7 +138,6 @@ class MainActivity : AppCompatActivity() {
         executor.shutdown()
     }
 
-    // ---------- SAF ----------
     private fun requestSaf(onGranted: () -> Unit) {
         if (safTreeUri != null) {
             onGranted()
@@ -147,7 +145,6 @@ class MainActivity : AppCompatActivity() {
         }
         pendingSafAction = onGranted
 
-        // Chiedi permesso SAF per la root (Memoria interna)
         val uri = Uri.parse("content://com.android.externalstorage.documents/root/primary")
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             putExtra(DocumentsContract.EXTRA_INITIAL_URI, uri)
@@ -158,7 +155,6 @@ class MainActivity : AppCompatActivity() {
         try {
             startActivityForResult(intent, REQ_SAF)
         } catch (e: Exception) {
-            // Fallback senza EXTRA_INITIAL_URI
             val fallback = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
@@ -200,12 +196,6 @@ class MainActivity : AppCompatActivity() {
         return doc
     }
 
-    private fun getSafParent(path: String): DocumentFile? {
-        val parent = File(path).parent ?: return null
-        return getSafDocumentFile(parent.absolutePath)
-    }
-
-    // ---------- PERMESSI ----------
     private fun hasStoragePermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             Environment.isExternalStorageManager()
@@ -242,7 +232,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- MEMORIA ----------
     private fun updateStorageInfo() {
         try {
             val stat = StatFs(Environment.getExternalStorageDirectory().path)
@@ -257,7 +246,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- LETTURA ----------
     private fun loadDirectory(path: String, resetCategory: Boolean = false) {
         currentPath = path
         txtPath.text = path
@@ -408,7 +396,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- RENDER ----------
     private fun renderList() {
         recycler.layoutManager = if (isGrid)
             GridLayoutManager(this, 3)
@@ -428,7 +415,6 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    // ---------- APERTURA FILE ----------
     private fun openFileWithDefault(item: FileItem) {
         val mimeType = getMimeType(item.name)
         val savedPackage = prefs.getString("app_for_$mimeType", null)
@@ -521,7 +507,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- MENU CONTESTUALE ----------
     private fun showItemMenu(item: FileItem) {
         val options = if (item.isDirectory) {
             arrayOf("Apri", "Copia", "Taglia", "Rinomina", "Elimina", "Proprietà")
@@ -554,8 +539,6 @@ class MainActivity : AppCompatActivity() {
             }
             .show()
     }
-
-    // ---------- OPERAZIONI FILE ----------
 
     private fun shareFile(item: FileItem) {
         try {
@@ -634,7 +617,6 @@ class MainActivity : AppCompatActivity() {
                 val newName = input.text.toString().trim()
                 if (newName.isEmpty() || newName == item.name) return@setPositiveButton
 
-                // 1. Prova diretto
                 try {
                     val parent = item.file.parentFile
                     val newFile = File(parent, newName)
@@ -647,7 +629,6 @@ class MainActivity : AppCompatActivity() {
                     }
                 } catch (_: Exception) {}
 
-                // 2. Fallback SAF
                 requestSaf {
                     val doc = getSafDocumentFile(item.path)
                     if (doc != null) {
@@ -676,7 +657,6 @@ class MainActivity : AppCompatActivity() {
             .setMessage("Eliminare \"${item.name}\"?")
             .setPositiveButton("Elimina") { _, _ ->
 
-                // 1. Prova diretto
                 val okFile = try {
                     if (item.isDirectory) deleteRecursively(item.file) else item.file.delete()
                 } catch (e: Exception) { false }
@@ -688,7 +668,6 @@ class MainActivity : AppCompatActivity() {
                     return@setPositiveButton
                 }
 
-                // 2. Fallback SAF
                 requestSaf {
                     val doc = getSafDocumentFile(item.path)
                     if (doc != null) {
@@ -722,8 +701,6 @@ class MainActivity : AppCompatActivity() {
         if (deleted) deleteFromMediaStore(file.absolutePath)
         return deleted
     }
-
-    // ---------- MEDIASTORE ----------
 
     private fun deleteFromMediaStore(path: String) {
         try {
@@ -795,7 +772,6 @@ class MainActivity : AppCompatActivity() {
                 val name = input.text.toString().trim()
                 if (name.isEmpty()) return@setPositiveButton
 
-                // 1. Prova diretto
                 try {
                     val newDir = File(currentPath, name)
                     if (newDir.mkdir()) {
@@ -806,7 +782,6 @@ class MainActivity : AppCompatActivity() {
                     }
                 } catch (_: Exception) {}
 
-                // 2. Fallback SAF
                 requestSaf {
                     val parent = getSafDocumentFile(currentPath)
                     if (parent != null) {
@@ -883,9 +858,8 @@ class MainActivity : AppCompatActivity() {
                         prefs.edit().putBoolean("show_hidden", showHidden).apply()
                         loadDirectory(currentPath)
                     }
-                    1 -> if (clipboardPath != null) pasteFromClipboard() else requestSaf { }
+                    1 -> if (clipboardPath != null) pasteFromClipboard()
                     2 -> {
-                        // Forza nuovo permesso SAF
                         safTreeUri = null
                         prefs.edit().remove("saf_tree_uri").apply()
                         requestSaf {
@@ -908,4 +882,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun goBack() {
-        if
+        if (currentPath == rootInternal) return
+        val parent = File(currentPath).parent
+        if (parent != null && parent.startsWith(rootInternal)) {
+            loadDirectory(parent)
+        }
+    }
+
+    override fun onBackPressed() {
+        if (currentPath != rootInternal) {
+            goBack()
+        } else {
+            super.onBackPressed()
+        }
+    }
+}
