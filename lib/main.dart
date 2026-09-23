@@ -80,6 +80,9 @@ class _HomePageState extends State<HomePage> {
   String currentPath = ROOT;
   List<FileSystemEntity> items = [];
   bool isGridView = false;
+  String searchQuery = '';
+  String? activeCategory; // null | 'images' | 'audio' | 'video' | 'documents'
+  String sortBy = 'name'; // name | size | date
 
   @override
   void initState() {
@@ -87,20 +90,13 @@ class _HomePageState extends State<HomePage> {
     _loadDirectory(ROOT);
   }
 
+  // ---------- LETTURA ----------
   void _loadDirectory(String path) {
     List<FileSystemEntity> list = [];
     try {
       final dir = Directory(path);
       if (dir.existsSync()) {
         list = dir.listSync();
-        list.sort((a, b) {
-          final aIsDir = a is Directory;
-          final bIsDir = b is Directory;
-          if (aIsDir && !bIsDir) return -1;
-          if (!aIsDir && bIsDir) return 1;
-          return a.path.split('/').last.toLowerCase()
-              .compareTo(b.path.split('/').last.toLowerCase());
-        });
       }
     } catch (_) {
       list = [];
@@ -108,9 +104,61 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       currentPath = path;
       items = list;
+      activeCategory = null;
     });
   }
 
+  // ---------- FILTRI + ORDINAMENTO ----------
+  List<FileSystemEntity> _filtered() {
+    var list = List<FileSystemEntity>.from(items);
+
+    // Ricerca
+    if (searchQuery.isNotEmpty) {
+      final q = searchQuery.toLowerCase();
+      list = list.where((e) =>
+        e.path.split('/').last.toLowerCase().contains(q)
+      ).toList();
+    }
+
+    // Categoria
+    if (activeCategory != null) {
+      list = list.where((e) {
+        if (e is Directory) return false;
+        return _iconFor(e) == activeCategory;
+      }).toList();
+    }
+
+    // Ordinamento
+    list.sort((a, b) {
+      final aIsDir = a is Directory;
+      final bIsDir = b is Directory;
+      if (aIsDir && !bIsDir) return -1;
+      if (!aIsDir && bIsDir) return 1;
+
+      if (sortBy == 'name') {
+        return a.path.split('/').last.toLowerCase()
+            .compareTo(b.path.split('/').last.toLowerCase());
+      }
+      if (sortBy == 'size') {
+        int sa = 0, sb = 0;
+        if (a is File) { try { sa = a.lengthSync(); } catch (_) {} }
+        if (b is File) { try { sb = b.lengthSync(); } catch (_) {} }
+        return sb.compareTo(sa);
+      }
+      if (sortBy == 'date') {
+        DateTime da = DateTime(1970);
+        DateTime db = DateTime(1970);
+        try { da = a.statSync().modified; } catch (_) {}
+        try { db = b.statSync().modified; } catch (_) {}
+        return db.compareTo(da);
+      }
+      return 0;
+    });
+
+    return list;
+  }
+
+  // ---------- ICONE ----------
   String _iconFor(FileSystemEntity item) {
     if (item is Directory) return 'folder';
     final name = item.path.toLowerCase();
@@ -138,6 +186,7 @@ class _HomePageState extends State<HomePage> {
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
   }
 
+  // ---------- NAVIGAZIONE ----------
   void _goBack() {
     if (currentPath == ROOT) return;
     final parent = currentPath.substring(0, currentPath.lastIndexOf('/'));
@@ -155,8 +204,61 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  void _showContextMenu(FileSystemEntity item, String name) {
+    showModalBottomSheet(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(title: Text(name), subtitle: const Text('File')),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.open_in_new),
+              title: const Text('Apri'),
+              onTap: () { Navigator.pop(context); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.copy),
+              title: const Text('Copia'),
+              onTap: () { Navigator.pop(context); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.content_cut),
+              title: const Text('Taglia'),
+              onTap: () { Navigator.pop(context); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.drive_file_rename_outline),
+              title: const Text('Rinomina'),
+              onTap: () { Navigator.pop(context); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.share),
+              title: const Text('Condividi'),
+              onTap: () { Navigator.pop(context); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete, color: Colors.red),
+              title: const Text('Elimina', style: TextStyle(color: Colors.red)),
+              onTap: () { Navigator.pop(context); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('Proprietà'),
+              onTap: () { Navigator.pop(context); },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ---------- BUILD ----------
   @override
   Widget build(BuildContext context) {
+    final filtered = _filtered();
+
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -169,30 +271,142 @@ class _HomePageState extends State<HomePage> {
           icon: const Icon(Icons.arrow_back),
           onPressed: _goBack,
         ),
-        actions: [
-          IconButton(
-            icon: Icon(isGridView ? Icons.view_list : Icons.grid_view),
-            onPressed: () => setState(() => isGridView = !isGridView),
+      ),
+      body: Column(
+        children: [
+          // ---------- RIGA 1: ricerca + impostazioni ----------
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    decoration: InputDecoration(
+                      hintText: 'Cerca file o cartelle...',
+                      prefixIcon: Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: AppIcon('search', size: 20),
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    onChanged: (v) => setState(() => searchQuery = v),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  onPressed: () => _showSettings(context),
+                  icon: AppIcon('settings', size: 24),
+                ),
+              ],
+            ),
           ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () => _loadDirectory(currentPath),
+
+          // ---------- RIGA 2: categorie ----------
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                _catButton('images', 'Immagini'),
+                const SizedBox(width: 8),
+                _catButton('audio', 'Audio'),
+                const SizedBox(width: 8),
+                _catButton('video', 'Video'),
+                const SizedBox(width: 8),
+                _catButton('documents', 'Documenti'),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          // ---------- RIGA 3: azioni ----------
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                IconButton(
+                  onPressed: _createFolder,
+                  icon: AppIcon('folderAdd', size: 24),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: DropdownButton<String>(
+                    value: sortBy,
+                    isExpanded: true,
+                    underline: Container(),
+                    items: const [
+                      DropdownMenuItem(value: 'name', child: Text('Nome')),
+                      DropdownMenuItem(value: 'size', child: Text('Dimensione')),
+                      DropdownMenuItem(value: 'date', child: Text('Data')),
+                    ],
+                    onChanged: (v) => setState(() => sortBy = v ?? 'name'),
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => setState(() => isGridView = !isGridView),
+                  icon: AppIcon(isGridView ? 'list' : 'grid', size: 24),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 4),
+
+          // ---------- LISTA ----------
+          Expanded(
+            child: filtered.isEmpty
+                ? const Center(child: Text('Cartella vuota'))
+                : isGridView
+                    ? _buildGrid(filtered)
+                    : _buildList(filtered),
           ),
         ],
       ),
-      body: items.isEmpty
-          ? const Center(child: Text('Cartella vuota'))
-          : isGridView
-              ? _buildGrid()
-              : _buildList(),
     );
   }
 
-  Widget _buildList() {
+  Widget _catButton(String key, String label) {
+    final isActive = activeCategory == key;
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => setState(() {
+          activeCategory = isActive ? null : key;
+        }),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: isActive
+                ? Theme.of(context).colorScheme.primary.withOpacity(0.15)
+                : Theme.of(context).cardColor,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isActive
+                  ? Theme.of(context).colorScheme.primary
+                  : Colors.grey.withOpacity(0.3),
+            ),
+          ),
+          child: Column(
+            children: [
+              AppIcon(key, size: 26),
+              const SizedBox(height: 4),
+              Text(label, style: const TextStyle(fontSize: 11)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildList(List<FileSystemEntity> list) {
     return ListView.builder(
-      itemCount: items.length,
+      itemCount: list.length,
       itemBuilder: (context, i) {
-        final item = items[i];
+        final item = list[i];
         final name = item.path.split('/').last;
         final isDir = item is Directory;
         int size = 0;
@@ -205,26 +419,28 @@ class _HomePageState extends State<HomePage> {
           title: Text(name),
           subtitle: isDir ? null : Text(_formatSize(size)),
           onTap: () => _onItemTap(item, name, isDir),
+          onLongPress: () => _showContextMenu(item, name),
         );
       },
     );
   }
 
-  Widget _buildGrid() {
+  Widget _buildGrid(List<FileSystemEntity> list) {
     return GridView.builder(
       padding: const EdgeInsets.all(8),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
         childAspectRatio: 0.85,
       ),
-      itemCount: items.length,
+      itemCount: list.length,
       itemBuilder: (context, i) {
-        final item = items[i];
+        final item = list[i];
         final name = item.path.split('/').last;
         final isDir = item is Directory;
 
         return InkWell(
           onTap: () => _onItemTap(item, name, isDir),
+          onLongPress: () => _showContextMenu(item, name),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -244,6 +460,66 @@ class _HomePageState extends State<HomePage> {
           ),
         );
       },
+    );
+  }
+
+  // ---------- AZIONI ----------
+  void _createFolder() {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Nuova cartella'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(hintText: 'Nome cartella'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Annulla'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final name = controller.text.trim();
+              Navigator.pop(context);
+              if (name.isEmpty) return;
+              try {
+                Directory('$currentPath/$name').createSync();
+                _loadDirectory(currentPath);
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Errore: $e')),
+                );
+              }
+            },
+            child: const Text('Crea'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSettings(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            ListTile(
+              leading: Icon(Icons.palette),
+              title: Text('Tema'),
+              subtitle: Text('Segue il sistema'),
+            ),
+            ListTile(
+              leading: Icon(Icons.info_outline),
+              title: Text('File Manager'),
+              subtitle: Text('v1.0.0'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
