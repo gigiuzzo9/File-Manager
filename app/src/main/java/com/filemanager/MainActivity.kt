@@ -20,8 +20,11 @@ import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.View
+import android.view.ViewGroup
+import android.widget.BaseAdapter
 import android.widget.EditText
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -430,23 +433,20 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    // ---------- APERTURA FILE CON PICKER PERSONALIZZATO ----------
+    // ---------- APERTURA FILE CON PICKER PERSONALIZZATO + ICONE ----------
 
     private fun openFileWithDefault(item: FileItem) {
         val mimeType = getMimeType(item.name)
 
-        // C'è un'app salvata per questo mimetype?
         val savedPackage = prefs.getString("app_for_$mimeType", null)
         if (savedPackage != null) {
             if (tryOpenWithPackage(item, savedPackage)) {
                 return
             } else {
-                // App disinstallata, pulisci e mostra picker
                 prefs.edit().remove("app_for_$mimeType").apply()
             }
         }
 
-        // Nessuna app salvata → mostra picker personalizzato
         showCustomAppPicker(item, mimeType)
     }
 
@@ -459,6 +459,8 @@ class MainActivity : AppCompatActivity() {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
+            // Concede permesso di lettura esplicito al package
+            grantUriPermission(packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             startActivity(intent)
             true
         } catch (e: Exception) {
@@ -469,13 +471,12 @@ class MainActivity : AppCompatActivity() {
     private fun showCustomAppPicker(item: FileItem, mimeType: String) {
         try {
             val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
-            val intent = Intent(Intent.ACTION_VIEW).apply {
+            val probeIntent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, mimeType)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
 
-            // Ottieni la lista delle app che possono gestire questo file
-            val apps = packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+            val apps = packageManager.queryIntentActivities(probeIntent, PackageManager.MATCH_DEFAULT_ONLY)
             val filtered = apps.filter { it.activityInfo.packageName != packageName }
 
             if (filtered.isEmpty()) {
@@ -483,30 +484,37 @@ class MainActivity : AppCompatActivity() {
                 return
             }
 
-            // Se c'è una sola app, aprila direttamente e salva
             if (filtered.size == 1) {
                 val app = filtered.first()
                 prefs.edit().putString("app_for_$mimeType", app.activityInfo.packageName).apply()
-                startActivity(createIntentForApp(intent, app))
-                Toast.makeText(this, "Apro con: ${app.loadLabel(packageManager)}", Toast.LENGTH_SHORT).show()
+                openWithResolveInfo(item, app, uri)
                 return
             }
 
-            // Più app → mostra AlertDialog
-            val appNames = filtered.map { it.loadLabel(packageManager).toString() }.toTypedArray()
+            // Adapter con icona + nome
+            val adapter = object : BaseAdapter() {
+                override fun getCount() = filtered.size
+                override fun getItem(position: Int) = filtered[position]
+                override fun getItemId(position: Int) = position.toLong()
+
+                override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+                    val view = convertView ?: layoutInflater.inflate(android.R.layout.activity_list_item, parent, false)
+                    val app = filtered[position]
+                    view.findViewById<ImageView>(android.R.id.icon).setImageDrawable(app.loadIcon(packageManager))
+                    val textView = view.findViewById<TextView>(android.R.id.text1)
+                    textView.text = app.loadLabel(packageManager).toString()
+                    textView.textSize = 16f
+                    return view
+                }
+            }
 
             AlertDialog.Builder(this)
                 .setTitle("Apri con...")
-                .setItems(appNames) { _, which ->
+                .setAdapter(adapter) { _, which ->
                     val chosenApp = filtered[which]
                     val packageChosen = chosenApp.activityInfo.packageName
-
-                    // Salva la scelta
                     prefs.edit().putString("app_for_$mimeType", packageChosen).apply()
-
-                    // Apri il file con l'app scelta
-                    startActivity(createIntentForApp(intent, chosenApp))
-                    Toast.makeText(this, "Ricorda: ${chosenApp.loadLabel(packageManager)}", Toast.LENGTH_SHORT).show()
+                    openWithResolveInfo(item, chosenApp, uri)
                 }
                 .setNegativeButton("Annulla", null)
                 .show()
@@ -516,17 +524,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun createIntentForApp(baseIntent: Intent, app: ResolveInfo): Intent {
-        val newIntent = Intent(baseIntent)
-        newIntent.setComponent(ComponentName(app.activityInfo.packageName, app.activityInfo.name))
-        newIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        return newIntent
+    private fun openWithResolveInfo(item: FileItem, app: ResolveInfo, uri: Uri) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, getMimeType(item.name))
+                setComponent(ComponentName(app.activityInfo.packageName, app.activityInfo.name))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            // Concede permesso di lettura esplicito al package
+            grantUriPermission(app.activityInfo.packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Errore apertura: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
-    // Apri con... esplicito (per cambiare app da menu)
     private fun openFileWithPicker(item: FileItem) {
         val mimeType = getMimeType(item.name)
-        // Rimuovi la preferenza salvata per questo mimetype
         prefs.edit().remove("app_for_$mimeType").apply()
         showCustomAppPicker(item, mimeType)
     }
@@ -565,8 +580,6 @@ class MainActivity : AppCompatActivity() {
             else -> "*/*"
         }
     }
-
-    // ---------- MENU CONTESTUALE ----------
 
     private fun showItemMenu(item: FileItem) {
         val options = mutableListOf<String>()
