@@ -922,9 +922,9 @@ class MainActivity : AppCompatActivity() {
         txtSort.text = "Ordina per $label"
     }
 
-    private fun toggleView() {
+      private fun toggleView() {
         isGrid = !isGrid
-        prefs.edit().putBoolean("is_grid, isGrid).apply()
+        prefs.edit().putBoolean("is_grid", isGrid).apply()
         renderList()
     }
 
@@ -981,4 +981,4 @@ class MainActivity : AppCompatActivity() {
             super.onBackPressed()
         }
     }
-}
+}}
