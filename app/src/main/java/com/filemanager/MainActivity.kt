@@ -1,5 +1,6 @@
 package com.filemanager
 
+import android.app.PendingIntent
 import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
@@ -31,7 +32,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var editSearch: EditText
     private lateinit var prefs: SharedPreferences
 
-    private var currentPath: String = "/storage/emulated/0"
+    private val ROOT_INTERNAL = "/storage/emulated/0"
+    private var currentPath: String = ROOT_INTERNAL
     private var allItems: List<FileItem> = emptyList()
     private var displayedItems: List<FileItem> = emptyList()
 
@@ -69,6 +71,11 @@ class MainActivity : AppCompatActivity() {
         findViewById<ImageButton>(R.id.btnSort).setOnClickListener { showSortDialog() }
         findViewById<ImageButton>(R.id.btnViewToggle).setOnClickListener { toggleView() }
         findViewById<ImageButton>(R.id.btnSettings).setOnClickListener { showSettingsDialog() }
+
+        // Card memoria → torna alla root interna
+        findViewById<LinearLayout>(R.id.storageCard).setOnClickListener {
+            loadDirectory(ROOT_INTERNAL)
+        }
 
         findViewById<LinearLayout>(R.id.catImages).setOnClickListener { setCategory("images") }
         findViewById<LinearLayout>(R.id.catAudio).setOnClickListener { setCategory("audio") }
@@ -152,9 +159,7 @@ class MainActivity : AppCompatActivity() {
     private fun loadDirectory(path: String) {
         currentPath = path
         txtPath.text = path
-        activeCategory = null
-        searchQuery = ""
-        editSearch.setText("")
+        // NON resettiamo activeCategory qui, così il filtro resta anche cambiando cartella
 
         val dir = File(path)
         if (!dir.exists() || !dir.isDirectory) {
@@ -220,8 +225,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Categorie: attiva/disattiva filtro. Se cambio categoria, ricarico la ROOT
     private fun setCategory(cat: String) {
-        activeCategory = if (activeCategory == cat) null else cat
+        if (activeCategory == cat) {
+            // Disattiva
+            activeCategory = null
+        } else {
+            activeCategory = cat
+        }
+        // Applica il filtro su TUTTA la root (non sulla cartella corrente)
         applyFilters()
     }
 
@@ -237,7 +249,7 @@ class MainActivity : AppCompatActivity() {
             isGrid = isGrid,
             onClick = { item ->
                 if (item.isDirectory) loadDirectory(item.path)
-                else openFile(item)
+                else openFileWithDefault(item)
             },
             onLongClick = { item ->
                 showItemMenu(item)
@@ -245,8 +257,11 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    // ---------- APRI FILE ----------
-    private fun openFile(item: FileItem) {
+    // ---------- APERTURA FILE ----------
+    private fun openFileWithDefault(item: FileItem) {
+        val mimeType = getMimeType(item.name)
+        val savedPackage = prefs.getString("app_for_$mimeType", null)
+
         try {
             val uri = FileProvider.getUriForFile(
                 this,
@@ -255,12 +270,66 @@ class MainActivity : AppCompatActivity() {
             )
 
             val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, getMimeType(item.name))
+                setDataAndType(uri, mimeType)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
 
-            startActivity(Intent.createChooser(intent, "Apri con..."))
+            if (savedPackage != null) {
+                intent.setPackage(savedPackage)
+                try {
+                    startActivity(intent)
+                    return
+                } catch (e: Exception) {
+                    prefs.edit().remove("app_for_$mimeType").apply()
+                }
+            }
+
+            showAppChooser(intent, mimeType)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Nessuna app per aprire questo file", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun showAppChooser(intent: Intent, mimeType: String) {
+        val chooser = Intent.createChooser(intent, "Apri con...")
+
+        val receiverIntent = Intent(this, AppChooserReceiver::class.java).apply {
+            putExtra("mime_type", mimeType)
+        }
+
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
+
+        val pendingIntent = PendingIntent.getBroadcast(
+            this,
+            mimeType.hashCode(),
+            receiverIntent,
+            flags
+        )
+
+        chooser.putExtra(Intent.EXTRA_CHOSEN_COMPONENT, pendingIntent)
+        startActivity(chooser)
+    }
+
+    private fun openFileWithPicker(item: FileItem) {
+        val mimeType = getMimeType(item.name)
+        try {
+            val uri = FileProvider.getUriForFile(
+                this,
+                "$packageName.provider",
+                item.file
+            )
+
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+
+            prefs.edit().remove("app_for_$mimeType").apply()
+            showAppChooser(intent, mimeType)
         } catch (e: Exception) {
             Toast.makeText(this, "Nessuna app per aprire questo file", Toast.LENGTH_SHORT).show()
         }
@@ -303,15 +372,22 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- MENU CONTESTUALE ----------
     private fun showItemMenu(item: FileItem) {
-        val options = arrayOf("Apri", "Rinomina", "Elimina", "Proprietà")
+        val options = arrayOf(
+            "Apri",
+            "Apri con...",
+            "Rinomina",
+            "Elimina",
+            "Proprietà"
+        )
         AlertDialog.Builder(this)
             .setTitle(item.name)
             .setItems(options) { _, which ->
                 when (which) {
-                    0 -> if (item.isDirectory) loadDirectory(item.path) else openFile(item)
-                    1 -> renameItem(item)
-                    2 -> deleteItem(item)
-                    3 -> showItemInfo(item)
+                    0 -> if (item.isDirectory) loadDirectory(item.path) else openFileWithDefault(item)
+                    1 -> if (!item.isDirectory) openFileWithPicker(item)
+                    2 -> renameItem(item)
+                    3 -> deleteItem(item)
+                    4 -> showItemInfo(item)
                 }
             }
             .show()
@@ -446,15 +522,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun goBack() {
-        if (currentPath == "/storage/emulated/0") return
+        if (currentPath == ROOT_INTERNAL) return
         val parent = File(currentPath).parent
-        if (parent != null && parent.startsWith("/storage/emulated/0")) {
+        if (parent != null && parent.startsWith(ROOT_INTERNAL)) {
             loadDirectory(parent)
         }
     }
 
     override fun onBackPressed() {
-        if (currentPath != "/storage/emulated/0") {
+        if (currentPath != ROOT_INTERNAL) {
             goBack()
         } else {
             super.onBackPressed()
