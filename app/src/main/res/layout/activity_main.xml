@@ -29,8 +29,10 @@
             android:layout_width="44dp"
             android:layout_height="44dp"
             android:layout_marginStart="8dp"
-            android:src="@android:drawable/ic_menu_preferences"
+            android:src="@drawable/settings"
             android:background="?attr/selectableItemBackgroundBorderless"
+            android:scaleType="fitCenter"
+            android:padding="8dp"
             android:contentDescription="Impostazioni" />
     </LinearLayout>
 
@@ -54,9 +56,9 @@
             android:background="?attr/selectableItemBackground">
 
             <ImageView
-                android:layout_width="28dp"
-                android:layout_height="28dp"
-                android:src="@android:drawable/ic_menu_gallery"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:src="@drawable/images"
                 android:contentDescription="" />
 
             <TextView
@@ -78,9 +80,9 @@
             android:background="?attr/selectableItemBackground">
 
             <ImageView
-                android:layout_width="28dp"
-                android:layout_height="28dp"
-                android:src="@android:drawable/ic_lock_silent_mode_off"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:src="@drawable/audio"
                 android:contentDescription="" />
 
             <TextView
@@ -102,9 +104,9 @@
             android:background="?attr/selectableItemBackground">
 
             <ImageView
-                android:layout_width="28dp"
-                android:layout_height="28dp"
-                android:src="@android:drawable/ic_media_play"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:src="@drawable/video"
                 android:contentDescription="" />
 
             <TextView
@@ -126,9 +128,9 @@
             android:background="?attr/selectableItemBackground">
 
             <ImageView
-                android:layout_width="28dp"
-                android:layout_height="28dp"
-                android:src="@android:drawable/ic_menu_agenda"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:src="@drawable/documents"
                 android:contentDescription="" />
 
             <TextView
@@ -210,8 +212,10 @@
             android:id="@+id/btnAddFolder"
             android:layout_width="40dp"
             android:layout_height="40dp"
-            android:src="@android:drawable/ic_menu_add"
+            android:src="@drawable/folder_add"
             android:background="?attr/selectableItemBackgroundBorderless"
+            android:scaleType="fitCenter"
+            android:padding="6dp"
             android:contentDescription="Nuova cartella" />
 
         <ImageButton
@@ -226,8 +230,10 @@
             android:id="@+id/btnViewToggle"
             android:layout_width="40dp"
             android:layout_height="40dp"
-            android:src="@android:drawable/ic_menu_sort_by_size"
+            android:src="@drawable/list"
             android:background="?attr/selectableItemBackgroundBorderless"
+            android:scaleType="fitCenter"
+            android:padding="6dp"
             android:contentDescription="Vista" />
     </LinearLayout>
 
