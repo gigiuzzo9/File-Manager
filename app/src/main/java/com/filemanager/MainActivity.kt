@@ -309,7 +309,16 @@ class MainActivity : AppCompatActivity() {
         var list = allItems.toList()
 
         if (searchQuery.isNotEmpty()) {
-            list = list.filter { it.name.lowercase().contains(searchQuery) }
+            if (currentPath == rootInternal) {
+                val results = mutableListOf<FileItem>()
+                val q = searchQuery.lowercase()
+                try {
+                    searchRecursive(File(rootInternal), q, results, 0)
+                } catch (_: Exception) {}
+                list = results
+            } else {
+                list = list.filter { it.name.lowercase().contains(searchQuery) }
+            }
         }
 
         if (activeCategory != null) {
@@ -326,6 +335,35 @@ class MainActivity : AppCompatActivity() {
 
         displayedItems = list
         renderList()
+    }
+
+    private fun searchRecursive(dir: File, query: String, out: MutableList<FileItem>, depth: Int) {
+        if (depth > 8) return
+        val dirName = dir.name
+        if (dirName == "Android" || dirName == ".trash" || dirName == ".thumbnails") return
+
+        val files = dir.listFiles() ?: return
+        for (f in files) {
+            val name = f.name
+            if (!showHidden && name.startsWith(".")) continue
+
+            if (name.lowercase().contains(query)) {
+                out.add(
+                    FileItem(
+                        file = f,
+                        name = name,
+                        path = f.absolutePath,
+                        isDirectory = f.isDirectory,
+                        size = if (f.isFile) f.length() else 0L,
+                        lastModified = f.lastModified()
+                    )
+                )
+            }
+
+            if (f.isDirectory) {
+                searchRecursive(f, query, out, depth + 1)
+            }
+        }
     }
 
     private fun categoryFor(name: String): String {
@@ -433,8 +471,6 @@ class MainActivity : AppCompatActivity() {
             }
         )
     }
-
-    // ---------- APERTURA FILE: MEMORIZZAZIONE PER CATEGORIA ----------
 
     private fun getCategoryKey(mimeType: String): String {
         return when {
