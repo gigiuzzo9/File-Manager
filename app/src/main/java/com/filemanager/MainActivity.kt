@@ -1,6 +1,7 @@
 package com.filemanager
 
 import android.app.Activity
+import android.content.ClipData
 import android.content.ComponentName
 import android.content.ContentValues
 import android.content.Intent
@@ -433,7 +434,7 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    // ---------- APERTURA FILE: MEMORIZZAZIONE PER CATEGORIA ----------
+    // ---------- APERTURA FILE: MEMORIZZAZIONE PER CATEGORIA + CLIPDATA ----------
 
     private fun getCategoryKey(mimeType: String): String {
         return when {
@@ -469,8 +470,16 @@ class MainActivity : AppCompatActivity() {
                 setPackage(packageName)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                clipData = ClipData.newRawUri("", uri)
             }
-            grantUriPermission(packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            val resInfoList = packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+            for (resolveInfo in resInfoList) {
+                grantUriPermission(
+                    resolveInfo.activityInfo.packageName,
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
             startActivity(intent)
             true
         } catch (e: Exception) {
@@ -540,8 +549,16 @@ class MainActivity : AppCompatActivity() {
                 setComponent(ComponentName(app.activityInfo.packageName, app.activityInfo.name))
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                clipData = ClipData.newRawUri("", uri)
             }
-            grantUriPermission(app.activityInfo.packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            val resInfoList = packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+            for (resolveInfo in resInfoList) {
+                grantUriPermission(
+                    resolveInfo.activityInfo.packageName,
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
             startActivity(intent)
         } catch (e: Exception) {
             Toast.makeText(this, "Errore apertura: ${e.message}", Toast.LENGTH_LONG).show()
@@ -638,6 +655,7 @@ class MainActivity : AppCompatActivity() {
                 type = getMimeType(item.name)
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                clipData = ClipData.newRawUri("", uri)
             }
             startActivity(Intent.createChooser(intent, "Condividi con..."))
         } catch (e: Exception) {
