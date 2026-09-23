@@ -81,16 +81,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   String currentPath = ROOT;
   List<FileSystemEntity> items = [];
   bool isGridView = false;
-  bool hasPermission = false;
-  bool showError = false;
-  bool _checkedOnce = false;
+  bool canRead = false;
+  bool isLoading = true;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkPermission();
+      _tryLoad();
     });
   }
 
@@ -102,59 +101,60 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _checkedOnce) {
-      _recheckPermission();
+    if (state == AppLifecycleState.resumed) {
+      _tryLoad();
     }
   }
 
-  Future<void> _checkPermission() async {
-    _checkedOnce = true;
+  // ---------- LOGICA PERMESSI ----------
+  // Non chiediamo a permission_handler "ho il permesso?".
+  // Proviamo DIRETTAMENTE a leggere la cartella.
+  // Se funziona → permesso ok. Se no → chiediamo.
+  Future<void> _tryLoad() async {
+    setState(() => isLoading = true);
 
-    // Prova a verificare il permesso
-    final status = await Permission.manageExternalStorage.status;
-
-    if (status.isGranted) {
-      setState(() => hasPermission = true);
-      _loadDirectory(currentPath);
-      return;
-    }
-
-    // Non concesso: prova a chiedere
-    final reqStatus = await Permission.manageExternalStorage.request();
-
-    if (reqStatus.isGranted) {
-      setState(() => hasPermission = true);
-      _loadDirectory(currentPath);
-      return;
-    }
-
-    // Ancora negato: apri la pagina specifica dei permessi
-    setState(() {
-      hasPermission = false;
-      showError = true;
-    });
-
-    // Prova ad aprire direttamente la sezione MANAGE_EXTERNAL_STORAGE
-    await _openManageStorageSettings();
-  }
-
-  Future<void> _recheckPermission() async {
-    final status = await Permission.manageExternalStorage.status;
-    if (status.isGranted) {
+    // Tentativo 1: prova a leggere la root
+    if (_canReadDirectory(ROOT)) {
       setState(() {
-        hasPermission = true;
-        showError = false;
+        canRead = true;
+        isLoading = false;
       });
-      _loadDirectory(currentPath);
+      _loadDirectory(ROOT);
+      return;
     }
+
+    // Tentativo 2: chiedi il permesso
+    await Permission.manageExternalStorage.request();
+
+    // Tentativo 3: riprova a leggere
+    if (_canReadDirectory(ROOT)) {
+      setState(() {
+        canRead = true;
+        isLoading = false;
+      });
+      _loadDirectory(ROOT);
+      return;
+    }
+
+    // Tentativo 4: apri le impostazioni
+    await openAppSettings();
+
+    // Tentativo 5: alla prossima apertura ricontrolla
+    setState(() {
+      canRead = false;
+      isLoading = false;
+    });
   }
 
-  Future<void> _openManageStorageSettings() async {
-    // Prova ad aprire direttamente la pagina "Gestisci tutti i file"
-    // permission_handler ha openAppSettings() che apre la pagina generale.
-    // Ma c'è un modo per aprire direttamente la sezione storage.
-    // Usiamo il metodo standard, e se non riesce, mostriamo il messaggio.
-    await openAppSettings();
+  bool _canReadDirectory(String path) {
+    try {
+      final dir = Directory(path);
+      if (!dir.existsSync()) return false;
+      dir.listSync().take(1); // prova a leggere almeno un elemento
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   void _loadDirectory(String path) {
@@ -172,8 +172,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       setState(() {
         currentPath = path;
         items = list;
-        hasPermission = true;
-        showError = false;
       });
     } catch (e) {
       setState(() {
@@ -245,15 +243,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             icon: Icon(isGridView ? Icons.view_list : Icons.grid_view),
             onPressed: () => setState(() => isGridView = !isGridView),
           ),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _tryLoad,
+          ),
         ],
       ),
-      body: !hasPermission
-          ? _buildPermissionScreen()
-          : items.isEmpty
-              ? const Center(child: Text('Cartella vuota'))
-              : isGridView
-                  ? _buildGrid()
-                  : _buildList(),
+      body: isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : !canRead
+              ? _buildPermissionScreen()
+              : items.isEmpty
+                  ? const Center(child: Text('Cartella vuota'))
+                  : isGridView
+                      ? _buildGrid()
+                      : _buildList(),
     );
   }
 
@@ -267,20 +271,28 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             const Icon(Icons.folder_off, size: 64, color: Colors.grey),
             const SizedBox(height: 24),
             const Text(
-              'Serve il permesso "Gestisci tutti i file"',
+              'Permesso "Gestisci tutti i file" necessario',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
             const Text(
-              'Nella pagina che si è aperta, attiva:\n'
+              'Apri le impostazioni e attiva:\n'
               '"File e media" → "Consenti gestione di tutti i file"',
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: () => _checkPermission(),
-              child: const Text('Riprova'),
+            ElevatedButton.icon(
+              onPressed: () async {
+                await openAppSettings();
+              },
+              icon: const Icon(Icons.settings),
+              label: const Text('Apri Impostazioni'),
+            ),
+            const SizedBox(height: 12),
+            TextButton(
+              onPressed: _tryLoad,
+              child: const Text('Ho attivato il permesso, ricontrolla'),
             ),
           ],
         ),
