@@ -1,15 +1,23 @@
 package com.filemanager
 
 import android.content.Intent
+import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.StatFs
 import android.provider.Settings
+import android.text.Editable
+import android.text.TextWatcher
+import android.widget.EditText
 import android.widget.ImageButton
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import java.io.File
@@ -18,19 +26,58 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var recycler: RecyclerView
     private lateinit var txtPath: TextView
+    private lateinit var txtInternalInfo: TextView
+    private lateinit var editSearch: EditText
+    private lateinit var prefs: SharedPreferences
+
     private var currentPath: String = "/storage/emulated/0"
+    private var allItems: List<FileItem> = emptyList()
+    private var displayedItems: List<FileItem> = emptyList()
+
+    private var showHidden: Boolean = false
+    private var isGrid: Boolean = false
+    private var sortBy: String = "name" // name | size | date
+    private var searchQuery: String = ""
+    private var activeCategory: String? = null // null | images | audio | video | documents
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        prefs = getSharedPreferences("filemanager", MODE_PRIVATE)
+        showHidden = prefs.getBoolean("show_hidden", false)
+        isGrid = prefs.getBoolean("is_grid", false)
+        sortBy = prefs.getString("sort_by", "name") ?: "name"
+
         recycler = findViewById(R.id.recyclerFiles)
         txtPath = findViewById(R.id.txtPath)
+        txtInternalInfo = findViewById(R.id.txtInternalInfo)
+        editSearch = findViewById(R.id.editSearch)
 
-        recycler.layoutManager = LinearLayoutManager(this)
+        // Ricerca
+        editSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                searchQuery = s?.toString()?.lowercase() ?: ""
+                applyFilters()
+            }
+        })
 
+        // Bottoni
         findViewById<ImageButton>(R.id.btnBack).setOnClickListener { goBack() }
-        findViewById<ImageButton>(R.id.btnRefresh).setOnClickListener { loadDirectory(currentPath) }
+        findViewById<ImageButton>(R.id.btnAddFolder).setOnClickListener { createFolder() }
+        findViewById<ImageButton>(R.id.btnSort).setOnClickListener { showSortDialog() }
+        findViewById<ImageButton>(R.id.btnViewToggle).setOnClickListener { toggleView() }
+        findViewById<ImageButton>(R.id.btnSettings).setOnClickListener { showSettingsDialog() }
+
+        // Categorie
+        findViewById<LinearLayout>(R.id.catImages).setOnClickListener { setCategory("images") }
+        findViewById<LinearLayout>(R.id.catAudio).setOnClickListener { setCategory("audio") }
+        findViewById<LinearLayout>(R.id.catVideo).setOnClickListener { setCategory("video") }
+        findViewById<LinearLayout>(R.id.catDocs).setOnClickListener { setCategory("documents") }
+
+        updateStorageInfo()
 
         if (hasStoragePermission()) {
             loadDirectory(currentPath)
@@ -46,6 +93,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- PERMESSI ----------
     private fun hasStoragePermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             Environment.isExternalStorageManager()
@@ -85,9 +133,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- MEMORIA ----------
+    private fun updateStorageInfo() {
+        try {
+            val stat = StatFs(Environment.getExternalStorageDirectory().path)
+            val totalBytes = stat.blockCountLong * stat.blockSizeLong
+            val freeBytes = stat.availableBlocksLong * stat.blockSizeLong
+            val usedBytes = totalBytes - freeBytes
+
+            val totalGb = totalBytes / (1024.0 * 1024.0 * 1024.0)
+            val usedGb = usedBytes / (1024.0 * 1024.0 * 1024.0)
+
+            txtInternalInfo.text = String.format("%.1f GB / %.1f GB", usedGb, totalGb)
+        } catch (e: Exception) {
+            txtInternalInfo.text = "Info non disponibili"
+        }
+    }
+
+    // ---------- LETTURA ----------
     private fun loadDirectory(path: String) {
         currentPath = path
         txtPath.text = path
+        activeCategory = null
+        searchQuery = ""
+        editSearch.setText("")
 
         val dir = File(path)
         if (!dir.exists() || !dir.isDirectory) {
@@ -101,7 +170,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val items = files.map { f ->
+        val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
+
+        allItems = filtered.map { f ->
             FileItem(
                 file = f,
                 name = f.name,
@@ -110,18 +181,227 @@ class MainActivity : AppCompatActivity() {
                 size = if (f.isFile) f.length() else 0L,
                 lastModified = f.lastModified()
             )
-        }.sortedWith(compareByDescending<FileItem> { it.isDirectory }
-            .thenBy { it.name.lowercase() })
+        }
 
-        recycler.adapter = FileAdapter(items) { item ->
-            if (item.isDirectory) {
-                loadDirectory(item.path)
-            } else {
-                Toast.makeText(this, "File: ${item.name}", Toast.LENGTH_SHORT).show()
+        applyFilters()
+    }
+
+    // ---------- FILTRI ----------
+    private fun applyFilters() {
+        var list = allItems.toList()
+
+        if (searchQuery.isNotEmpty()) {
+            list = list.filter { it.name.lowercase().contains(searchQuery) }
+        }
+
+        if (activeCategory != null) {
+            list = list.filter { item ->
+                !item.isDirectory && categoryFor(item.name) == activeCategory
             }
+        }
+
+        list = when (sortBy) {
+            "size" -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenByDescending { it.size })
+            "date" -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenByDescending { it.lastModified })
+            else -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenBy { it.name.lowercase() })
+        }
+
+        displayedItems = list
+        renderList()
+    }
+
+    private fun categoryFor(name: String): String {
+        val l = name.lowercase()
+        return when {
+            l.endsWith(".jpg") || l.endsWith(".jpeg") || l.endsWith(".png") ||
+            l.endsWith(".gif") || l.endsWith(".webp") || l.endsWith(".bmp") -> "images"
+            l.endsWith(".mp3") || l.endsWith(".wav") || l.endsWith(".ogg") ||
+            l.endsWith(".flac") || l.endsWith(".m4a") || l.endsWith(".aac") -> "audio"
+            l.endsWith(".mp4") || l.endsWith(".mkv") || l.endsWith(".avi") ||
+            l.endsWith(".mov") || l.endsWith(".webm") || l.endsWith(".3gp") -> "video"
+            else -> "documents"
         }
     }
 
+    private fun setCategory(cat: String) {
+        activeCategory = if (activeCategory == cat) null else cat
+        applyFilters()
+    }
+
+    // ---------- RENDER ----------
+    private fun renderList() {
+        recycler.layoutManager = if (isGrid)
+            GridLayoutManager(this, 3)
+        else
+            LinearLayoutManager(this)
+
+        recycler.adapter = FileAdapter(
+            items = displayedItems,
+            isGrid = isGrid,
+            onClick = { item ->
+                if (item.isDirectory) loadDirectory(item.path)
+                else Toast.makeText(this, "File: ${item.name}", Toast.LENGTH_SHORT).show()
+            },
+            onLongClick = { item ->
+                showItemMenu(item)
+            }
+        )
+    }
+
+    // ---------- MENU CONTESTUALE ----------
+    private fun showItemMenu(item: FileItem) {
+        val options = arrayOf(
+            "Apri",
+            "Rinomina",
+            "Elimina",
+            "Proprietà"
+        )
+
+        AlertDialog.Builder(this)
+            .setTitle(item.name)
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> if (item.isDirectory) loadDirectory(item.path)
+                         else Toast.makeText(this, "Apro: ${item.name}", Toast.LENGTH_SHORT).show()
+                    1 -> renameItem(item)
+                    2 -> deleteItem(item)
+                    3 -> showItemInfo(item)
+                }
+            }
+            .show()
+    }
+
+    private fun renameItem(item: FileItem) {
+        val input = EditText(this)
+        input.setText(item.name)
+
+        AlertDialog.Builder(this)
+            .setTitle("Rinomina")
+            .setView(input)
+            .setPositiveButton("OK") { _, _ ->
+                val newName = input.text.toString().trim()
+                if (newName.isEmpty()) return@setPositiveButton
+                try {
+                    val newFile = File(item.file.parent, newName)
+                    item.file.renameTo(newFile)
+                    loadDirectory(currentPath)
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Annulla", null)
+            .show()
+    }
+
+    private fun deleteItem(item: FileItem) {
+        AlertDialog.Builder(this)
+            .setTitle("Elimina")
+            .setMessage("Eliminare \"${item.name}\"?")
+            .setPositiveButton("Elimina") { _, _ ->
+                try {
+                    val ok = if (item.isDirectory) item.file.deleteRecursively()
+                             else item.file.delete()
+                    if (ok) loadDirectory(currentPath)
+                    else Toast.makeText(this, "Impossibile eliminare", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Annulla", null)
+            .show()
+    }
+
+    private fun showItemInfo(item: FileItem) {
+        val info = buildString {
+            append("Percorso: ${item.path}\n")
+            if (!item.isDirectory) append("Dimensione: ${formatSize(item.size)}\n")
+            append("Modificato: ${java.util.Date(item.lastModified)}")
+        }
+        AlertDialog.Builder(this)
+            .setTitle(item.name)
+            .setMessage(info)
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    // ---------- AZIONI ----------
+    private fun createFolder() {
+        val input = EditText(this)
+        input.hint = "Nome cartella"
+
+        AlertDialog.Builder(this)
+            .setTitle("Nuova cartella")
+            .setView(input)
+            .setPositiveButton("Crea") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isEmpty()) return@setPositiveButton
+                try {
+                    val newDir = File(currentPath, name)
+                    if (newDir.mkdir()) loadDirectory(currentPath)
+                    else Toast.makeText(this, "Impossibile creare", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Annulla", null)
+            .show()
+    }
+
+    private fun showSortDialog() {
+        val options = arrayOf("Nome", "Dimensione", "Data")
+        val current = when (sortBy) {
+            "size" -> 1
+            "date" -> 2
+            else -> 0
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Ordina per")
+            .setSingleChoiceItems(options, current) { dialog, which ->
+                sortBy = when (which) {
+                    1 -> "size"
+                    2 -> "date"
+                    else -> "name"
+                }
+                prefs.edit().putString("sort_by", sortBy).apply()
+                applyFilters()
+                dialog.dismiss()
+            }
+            .show()
+    }
+
+    private fun toggleView() {
+        isGrid = !isGrid
+        prefs.edit().putBoolean("is_grid", isGrid).apply()
+        renderList()
+    }
+
+    private fun showSettingsDialog() {
+        val options = arrayOf(
+            if (showHidden) "Nascondi file nascosti" else "Mostra file nascosti"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Impostazioni")
+            .setItems(options) { _, which ->
+                if (which == 0) {
+                    showHidden = !showHidden
+                    prefs.edit().putBoolean("show_hidden", showHidden).apply()
+                    loadDirectory(currentPath)
+                }
+            }
+            .show()
+    }
+
+    private fun formatSize(bytes: Long): String {
+        if (bytes < 1024) return "$bytes B"
+        val kb = bytes / 1024.0
+        if (kb < 1024) return String.format("%.1f KB", kb)
+        val mb = kb / 1024.0
+        if (mb < 1024) return String.format("%.1f MB", mb)
+        val gb = mb / 1024.0
+        return String.format("%.1f GB", gb)
+    }
+
+    // ---------- NAVIGAZIONE ----------
     private fun goBack() {
         if (currentPath == "/storage/emulated/0") return
         val parent = File(currentPath).parent
