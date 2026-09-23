@@ -5,8 +5,9 @@
     android:orientation="vertical"
     android:fitsSystemWindows="true">
 
-    <!-- RIGA 1: Ricerca + Impostazioni -->
+    <!-- BARRA RICERCA + IMPOSTAZIONI (visibile normalmente) -->
     <LinearLayout
+        android:id="@+id/searchBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
@@ -39,8 +40,73 @@
             android:contentDescription="Impostazioni" />
     </LinearLayout>
 
-    <!-- RIGA 2: 4 Categorie -->
+    <!-- BARRA SELEZIONE (visibile solo in modalità selezione) -->
     <LinearLayout
+        android:id="@+id/selectionBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="8dp"
+        android:gravity="center_vertical"
+        android:background="#1E1E1E"
+        android:visibility="gone">
+
+        <ImageButton
+            android:id="@+id/btnSelectionClose"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@android:drawable/ic_menu_close_clear_cancel"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Annulla selezione" />
+
+        <TextView
+            android:id="@+id/txtSelectionCount"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:text="0 selezionati"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <ImageButton
+            android:id="@+id/btnSelCopy"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@android:drawable/ic_menu_crop"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Copia" />
+
+        <ImageButton
+            android:id="@+id/btnSelCut"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@android:drawable/ic_menu_cut"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Taglia" />
+
+        <ImageButton
+            android:id="@+id/btnSelShare"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@android:drawable/ic_menu_share"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Condividi" />
+
+        <ImageButton
+            android:id="@+id/btnSelDelete"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@android:drawable/ic_menu_delete"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Elimina" />
+    </LinearLayout>
+
+    <!-- RIGA CATEGORIE (nascosta in modalità selezione) -->
+    <LinearLayout
+        android:id="@+id/categoriesRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
@@ -145,7 +211,7 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- RIGA 3: Memorie (contenitore dinamico) -->
+    <!-- RIGA STORAGE -->
     <LinearLayout
         android:id="@+id/storageRow"
         android:layout_width="match_parent"
@@ -153,12 +219,11 @@
         android:orientation="horizontal"
         android:paddingStart="8dp"
         android:paddingEnd="8dp"
-        android:paddingBottom="8dp">
-        <!-- Le card vengono generate dinamicamente dal codice -->
-    </LinearLayout>
+        android:paddingBottom="8dp" />
 
-    <!-- RIGA 4: Aggiungi | Ordina | Incolla | Vista -->
+    <!-- RIGA AZIONI -->
     <LinearLayout
+        android:id="@+id/actionsRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
@@ -226,7 +291,7 @@
             android:contentDescription="Vista" />
     </LinearLayout>
 
-    <!-- RIGA 5: Indietro + path -->
+    <!-- RIGA PERCORSO -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
