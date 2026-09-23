@@ -1037,7 +1037,8 @@ class MainActivity : AppCompatActivity() {
                 ZipInputStream(FileInputStream(zipSource)).use { zis ->
                     var entry: ZipEntry? = zis.nextEntry
                     while (entry != null) {
-                        entries.add("${entry.name} (dir=${entry.isDirectory}, size=${entry.size})")
+                        val currentEntry = entry
+                        entries.add("${currentEntry.name} (dir=${currentEntry.isDirectory}, size=${currentEntry.size})")
                         zis.closeEntry()
                         entry = zis.nextEntry
                     }
@@ -1052,7 +1053,9 @@ class MainActivity : AppCompatActivity() {
                 ZipInputStream(FileInputStream(zipSource)).use { zis ->
                     var entry: ZipEntry? = zis.nextEntry
                     while (entry != null) {
-                        val entryName = entry.name
+                        val currentEntry = entry
+
+                        val entryName = currentEntry.name
                         val outFile = File(extractDir, entryName)
 
                         if (!outFile.canonicalPath.startsWith(extractDir.canonicalPath)) {
@@ -1062,7 +1065,7 @@ class MainActivity : AppCompatActivity() {
                             continue
                         }
 
-                        if (entry.isDirectory) {
+                        if (currentEntry.isDirectory) {
                             val ok = outFile.mkdirs()
                             debugLog.append("\nDIR: $entryName -> mkdirs=$ok\n")
                         } else {
