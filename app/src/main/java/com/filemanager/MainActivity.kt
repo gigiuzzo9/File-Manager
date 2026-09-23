@@ -32,6 +32,7 @@ import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -60,13 +61,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var txtSort: TextView
     private lateinit var editSearch: EditText
     private lateinit var prefs: SharedPreferences
-    private lateinit var btnPaste: ImageButton
     private lateinit var storageRow: LinearLayout
     private lateinit var searchBar: LinearLayout
     private lateinit var selectionBar: LinearLayout
     private lateinit var categoriesRow: LinearLayout
     private lateinit var actionsRow: LinearLayout
     private lateinit var txtSelectionCount: TextView
+    private lateinit var btnSelPaste: LinearLayout
+    private lateinit var btnSelMore: LinearLayout
 
     private val rootInternal: String
         get() = if (File("/storage/emulated/0").exists()) {
@@ -113,13 +115,14 @@ class MainActivity : AppCompatActivity() {
         txtPath = findViewById(R.id.txtPath)
         txtSort = findViewById(R.id.txtSort)
         editSearch = findViewById(R.id.editSearch)
-        btnPaste = findViewById(R.id.btnPaste)
         storageRow = findViewById(R.id.storageRow)
         searchBar = findViewById(R.id.searchBar)
         selectionBar = findViewById(R.id.selectionBar)
         categoriesRow = findViewById(R.id.categoriesRow)
         actionsRow = findViewById(R.id.actionsRow)
         txtSelectionCount = findViewById(R.id.txtSelectionCount)
+        btnSelPaste = findViewById(R.id.btnSelPaste)
+        btnSelMore = findViewById(R.id.btnSelMore)
 
         editSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -135,7 +138,6 @@ class MainActivity : AppCompatActivity() {
         findViewById<LinearLayout>(R.id.btnSort).setOnClickListener { showSortDialog() }
         findViewById<ImageButton>(R.id.btnViewToggle).setOnClickListener { toggleView() }
         findViewById<ImageButton>(R.id.btnSettings).setOnClickListener { showSettingsDialog() }
-        btnPaste.setOnClickListener { pasteFromClipboard() }
 
         findViewById<LinearLayout>(R.id.catImages).setOnClickListener { setCategory("images") }
         findViewById<LinearLayout>(R.id.catAudio).setOnClickListener { setCategory("audio") }
@@ -143,14 +145,13 @@ class MainActivity : AppCompatActivity() {
         findViewById<LinearLayout>(R.id.catDocs).setOnClickListener { setCategory("documents") }
 
         findViewById<ImageButton>(R.id.btnSelectionClose).setOnClickListener { exitSelectionMode() }
-        findViewById<ImageButton>(R.id.btnSelDelete).setOnClickListener { deleteSelectedFiles() }
-        findViewById<ImageButton>(R.id.btnSelCopy).setOnClickListener { copySelectedFiles("copy") }
-        findViewById<ImageButton>(R.id.btnSelCut).setOnClickListener { copySelectedFiles("cut") }
-        findViewById<ImageButton>(R.id.btnSelShare).setOnClickListener { shareSelectedFiles() }
+        findViewById<LinearLayout>(R.id.btnSelCopy).setOnClickListener { copySelectedFiles("copy") }
+        findViewById<LinearLayout>(R.id.btnSelDelete).setOnClickListener { deleteSelectedFiles() }
+        btnSelPaste.setOnClickListener { pasteFromClipboard() }
+        btnSelMore.setOnClickListener { showSelectionMoreMenu() }
 
         updateStorageCards()
         updateSortLabel()
-        updatePasteButton()
 
         if (hasStoragePermission()) {
             loadDirectory(currentPath)
@@ -164,17 +165,12 @@ class MainActivity : AppCompatActivity() {
         if (hasStoragePermission()) {
             loadDirectory(currentPath)
         }
-        updatePasteButton()
         updateStorageCards()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         executor.shutdown()
-    }
-
-    private fun updatePasteButton() {
-        btnPaste.visibility = if (clipboardPath != null) View.VISIBLE else View.GONE
     }
 
     // ---------- SELEZIONE MULTIPLA ----------
@@ -215,7 +211,12 @@ class MainActivity : AppCompatActivity() {
             categoriesRow.visibility = View.GONE
             storageRow.visibility = View.GONE
             actionsRow.visibility = View.GONE
-            txtSelectionCount.text = "${selectedPaths.size} selezionati"
+
+            val count = selectedPaths.size
+            txtSelectionCount.text = if (count == 1) "1 selezionato" else "$count selezionati"
+
+            // Incolla visibile solo se c'è qualcosa negli appunti
+            btnSelPaste.visibility = if (clipboardPath != null) View.VISIBLE else View.GONE
         } else {
             searchBar.visibility = View.VISIBLE
             selectionBar.visibility = View.GONE
@@ -229,6 +230,8 @@ class MainActivity : AppCompatActivity() {
         if (selectedPaths.isEmpty()) return
 
         val count = selectedPaths.size
+        val pathAtStart = currentPath
+
         AlertDialog.Builder(this)
             .setTitle("Elimina")
             .setMessage("Eliminare $count file?")
@@ -250,7 +253,11 @@ class MainActivity : AppCompatActivity() {
                     mainHandler.post {
                         Toast.makeText(this, "Eliminati $finalDeleted file", Toast.LENGTH_SHORT).show()
                         exitSelectionMode()
-                        loadDirectory(currentPath)
+                        if (currentPath == pathAtStart) {
+                            loadDirectory(currentPath)
+                        } else {
+                            loadDirectory(pathAtStart)
+                        }
                     }
                 }
             }
@@ -263,9 +270,75 @@ class MainActivity : AppCompatActivity() {
         val first = selectedPaths.first()
         clipboardPath = first
         clipboardAction = action
-        Toast.makeText(this, "${selectedPaths.size} file ${if (action == "cut") "tagliati" else "copiati"}", Toast.LENGTH_SHORT).show()
-        updatePasteButton()
+        Toast.makeText(
+            this,
+            "${selectedPaths.size} file ${if (action == "cut") "tagliati" else "copiati"}",
+            Toast.LENGTH_SHORT
+        ).show()
         exitSelectionMode()
+    }
+
+    // ---------- MENU ⋮ DELLA SELEZIONE ----------
+
+    private fun showSelectionMoreMenu() {
+        if (selectedPaths.isEmpty()) return
+
+        val popup = PopupMenu(this, btnSelMore)
+        val count = selectedPaths.size
+
+        popup.menu.add(0, 1, 0, "✂️  Taglia")
+        popup.menu.add(0, 2, 1, "📤  Condividi")
+        popup.menu.add(0, 3, 2, "📦  Comprimi in ZIP")
+
+        // Voci extra solo con 1 file selezionato
+        if (count == 1) {
+            val path = selectedPaths.first()
+            val item = allItems.find { it.path == path }
+            if (item != null) {
+                popup.menu.add(0, 4, 3, "✏️  Rinomina")
+                if (!item.isDirectory && item.name.lowercase().endsWith(".zip")) {
+                    popup.menu.add(0, 5, 4, "📂  Decomprimi")
+                }
+                popup.menu.add(0, 6, 5, "ℹ️  Proprietà")
+            }
+        }
+
+        popup.setOnMenuItemClickListener { menuItem ->
+            when (menuItem.itemId) {
+                1 -> copySelectedFiles("cut")
+                2 -> shareSelectedFiles()
+                3 -> comprimiZipSelezioneMultipla()
+                4 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) {
+                        exitSelectionMode()
+                        renameItem(item)
+                    }
+                }
+                5 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) {
+                        exitSelectionMode()
+                        decomprimiZip(item)
+                    }
+                }
+                6 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) {
+                        exitSelectionMode()
+                        showItemInfo(item)
+                    }
+                }
+            }
+            true
+        }
+        popup.show()
+    }
+
+    private fun getSingleSelectedItem(): FileItem? {
+        if (selectedPaths.size != 1) return null
+        val path = selectedPaths.first()
+        return allItems.find { it.path == path }
     }
 
     private fun shareSelectedFiles() {
@@ -273,9 +346,11 @@ class MainActivity : AppCompatActivity() {
         if (selectedPaths.size == 1) {
             val path = selectedPaths.first()
             val item = allItems.find { it.path == path }
-            if (item != null) {
+            if (item != null && !item.isDirectory) {
                 shareFile(item)
                 exitSelectionMode()
+            } else if (item != null && item.isDirectory) {
+                Toast.makeText(this, "Impossibile condividere una cartella", Toast.LENGTH_SHORT).show()
             }
             return
         }
@@ -284,7 +359,7 @@ class MainActivity : AppCompatActivity() {
             val uris = ArrayList<Uri>()
             for (path in selectedPaths) {
                 val f = File(path)
-                if (f.exists()) {
+                if (f.exists() && f.isFile) {
                     val uri = FileProvider.getUriForFile(this, "$packageName.provider", f)
                     uris.add(uri)
                 }
@@ -304,6 +379,74 @@ class MainActivity : AppCompatActivity() {
             exitSelectionMode()
         } catch (e: Exception) {
             Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // ---------- COMPRIMI MULTI ----------
+
+    private fun comprimiZipSelezioneMultipla() {
+        if (selectedPaths.isEmpty()) return
+
+        val pathsToZip = selectedPaths.toList()
+        val firstPath = pathsToZip.first()
+        val firstName = File(firstPath).name
+        val baseName = if (firstName.contains(".")) firstName.substringBeforeLast(".") else firstName
+
+        // Trova un nome ZIP libero: nome.zip, nome_1.zip, nome_2.zip...
+        var zipName = "$baseName.zip"
+        var counter = 1
+        while (File(currentPath, zipName).exists()) {
+            zipName = "${baseName}_$counter.zip"
+            counter++
+        }
+
+        val finalZipName = zipName
+        Toast.makeText(this, "Compressione in corso...", Toast.LENGTH_SHORT).show()
+
+        executor.execute {
+            val zipFile = File(currentPath, finalZipName)
+            var ok = false
+            var errorMsg = ""
+            var addedCount = 0
+
+            try {
+                ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
+                    for (path in pathsToZip) {
+                        val f = File(path)
+                        if (!f.exists()) continue
+                        if (f.isDirectory) {
+                            addDirectoryToZip(f, f.name, zos)
+                        } else {
+                            addFileToZip(f, f.name, zos)
+                        }
+                        addedCount++
+                    }
+                }
+                ok = addedCount > 0
+                if (!ok) errorMsg = "Nessun file aggiunto"
+            } catch (e: Exception) {
+                ok = false
+                errorMsg = e.message ?: e.toString()
+                try { zipFile.delete() } catch (_: Exception) {}
+            }
+
+            if (ok) {
+                scanPath(zipFile.absolutePath)
+            }
+
+            mainHandler.post {
+                if (ok) {
+                    Toast.makeText(this, "Creato: $finalZipName", Toast.LENGTH_SHORT).show()
+                    exitSelectionMode()
+                    loadDirectory(currentPath)
+                } else {
+                    AlertDialog.Builder(this)
+                        .setTitle("Errore Compressione")
+                        .setMessage("Errore:\n$errorMsg")
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
+            }
         }
     }
 
@@ -631,7 +774,6 @@ class MainActivity : AppCompatActivity() {
                 }
                 allItems = result
                 applyFilters()
-                updatePasteButton()
             }
         }
     }
@@ -959,13 +1101,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun openFileWithPicker(item: FileItem) {
-        val mimeType = getMimeType(item.name)
-        val categoryKey = getCategoryKey(mimeType)
-        prefs.edit().remove("app_for_$categoryKey").apply()
-        showCustomAppPicker(item, mimeType, categoryKey)
-    }
-
     private fun getMimeType(name: String): String {
         val l = name.lowercase()
         return when {
@@ -1001,60 +1136,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- MENU CONTESTUALE ----------
-
-    private fun showItemMenu(item: FileItem) {
-        val options = mutableListOf<String>()
-        options.add("Apri")
-        if (!item.isDirectory) options.add("Apri con...")
-        if (!item.isDirectory) options.add("Condividi")
-        options.add("Copia")
-        options.add("Taglia")
-        if (clipboardPath != null) options.add("Incolla qui")
-
-        val isZip = item.name.lowercase().endsWith(".zip")
-        if (isZip) {
-            options.add("Decomprimi qui")
-        } else {
-            options.add("Comprimi in ZIP")
-        }
-
-        options.add("Rinomina")
-        options.add("Elimina")
-        options.add("Proprietà")
-
-        AlertDialog.Builder(this)
-            .setTitle(item.name)
-            .setItems(options.toTypedArray()) { _, which ->
-                val choice = options[which]
-                when (choice) {
-                    "Apri" -> if (item.isDirectory) loadDirectory(item.path) else openFileWithDefault(item)
-                    "Apri con..." -> openFileWithPicker(item)
-                    "Condividi" -> shareFile(item)
-                    "Copia" -> {
-                        clipboardPath = item.path
-                        clipboardAction = "copy"
-                        Toast.makeText(this, "Copiato: ${item.name}", Toast.LENGTH_SHORT).show()
-                        updatePasteButton()
-                    }
-                    "Taglia" -> {
-                        clipboardPath = item.path
-                        clipboardAction = "cut"
-                        Toast.makeText(this, "Tagliato: ${item.name}", Toast.LENGTH_SHORT).show()
-                        updatePasteButton()
-                    }
-                    "Incolla qui" -> pasteFromClipboard()
-                    "Comprimi in ZIP" -> comprimiZip(item)
-                    "Decomprimi qui" -> decomprimiZip(item)
-                    "Rinomina" -> renameItem(item)
-                    "Elimina" -> deleteItem(item)
-                    "Proprietà" -> showItemInfo(item)
-                }
-            }
-            .show()
-    }
-
-    // ---------- COMPRIMI ----------
+    // ---------- COMPRIMI SINGOLO ----------
 
     private fun comprimiZip(item: FileItem) {
         val zipName = if (item.isDirectory) "${item.name}.zip" else item.name.substringBeforeLast(".") + ".zip"
@@ -1339,7 +1421,7 @@ class MainActivity : AppCompatActivity() {
                 .show()
             clipboardPath = null
             clipboardAction = null
-            updatePasteButton()
+            if (selectionMode) updateSelectionUI()
             return
         }
 
@@ -1410,7 +1492,7 @@ class MainActivity : AppCompatActivity() {
                     ).show()
                     clipboardPath = null
                     clipboardAction = null
-                    updatePasteButton()
+                    exitSelectionMode()
                     loadDirectory(currentPath)
                 } else {
                     AlertDialog.Builder(this)
@@ -1537,45 +1619,6 @@ class MainActivity : AppCompatActivity() {
                                 loadDirectory(currentPath)
                             } else {
                                 Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
-                            }
-                        } catch (e: Exception) {
-                            Toast.makeText(this, "Errore SAF: ${e.message}", Toast.LENGTH_LONG).show()
-                        }
-                    } else {
-                        Toast.makeText(this, "File non accessibile via SAF", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-            .setNegativeButton("Annulla", null)
-            .show()
-    }
-
-    private fun deleteItem(item: FileItem) {
-        AlertDialog.Builder(this)
-            .setTitle("Elimina")
-            .setMessage("Eliminare \"${item.name}\"?")
-            .setPositiveButton("Elimina") { _, _ ->
-
-                val okFile = try {
-                    if (item.isDirectory) deleteRecursively(item.file) else item.file.delete()
-                } catch (e: Exception) { false }
-
-                if (okFile) {
-                    scanPath(item.path)
-                    Toast.makeText(this, "Eliminato", Toast.LENGTH_SHORT).show()
-                    loadDirectory(currentPath)
-                    return@setPositiveButton
-                }
-
-                requestSaf {
-                    val doc = getSafDocumentFile(item.path)
-                    if (doc != null) {
-                        try {
-                            if (doc.delete()) {
-                                Toast.makeText(this, "Eliminato (SAF)", Toast.LENGTH_SHORT).show()
-                                loadDirectory(currentPath)
-                            } else {
-                                Toast.makeText(this, "Impossibile eliminare", Toast.LENGTH_SHORT).show()
                             }
                         } catch (e: Exception) {
                             Toast.makeText(this, "Errore SAF: ${e.message}", Toast.LENGTH_LONG).show()
@@ -1749,7 +1792,6 @@ class MainActivity : AppCompatActivity() {
     private fun showSettingsDialog() {
         val options = mutableListOf<String>()
         options.add(if (showHidden) "Nascondi file nascosti" else "Mostra file nascosti")
-        if (clipboardPath != null) options.add("Incolla qui")
         options.add("Rinnova permesso scrittura")
 
         AlertDialog.Builder(this)
@@ -1761,8 +1803,7 @@ class MainActivity : AppCompatActivity() {
                         prefs.edit().putBoolean("show_hidden", showHidden).apply()
                         loadDirectory(currentPath)
                     }
-                    1 -> if (clipboardPath != null) pasteFromClipboard()
-                    2 -> {
+                    1 -> {
                         safTreeUri = null
                         prefs.edit().remove("saf_tree_uri").apply()
                         requestSaf {
