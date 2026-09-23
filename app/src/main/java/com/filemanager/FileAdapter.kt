@@ -6,6 +6,9 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
+import com.bumptech.glide.Glide
+import com.bumptech.glide.load.engine.DiskCacheStrategy
+import java.io.File
 
 class FileAdapter(
     private val items: List<FileItem>,
@@ -29,9 +32,40 @@ class FileAdapter(
     override fun onBindViewHolder(holder: VH, position: Int) {
         val item = items[position]
         holder.name.text = item.name
-
-        holder.icon?.setImageResource(if (item.isDirectory) R.drawable.folder else iconForFile(item.name))
         holder.meta?.text = if (item.isDirectory) "" else formatSize(item.size)
+
+        val iconView = holder.icon
+        if (iconView != null) {
+            if (item.isDirectory) {
+                iconView.setImageResource(R.drawable.folder)
+            } else {
+                val mime = getMimeType(item.name)
+                when {
+                    mime.startsWith("image/") -> {
+                        // Anteprima per le immagini
+                        Glide.with(iconView.context)
+                            .load(File(item.path))
+                            .diskCacheStrategy(DiskCacheStrategy.ALL)
+                            .centerCrop()
+                            .placeholder(R.drawable.images)
+                            .error(R.drawable.images)
+                            .into(iconView)
+                    }
+                    mime.startsWith("video/") -> {
+                        // Anteprima per i video (frame iniziale)
+                        Glide.with(iconView.context)
+                            .load(File(item.path))
+                            .diskCacheStrategy(DiskCacheStrategy.ALL)
+                            .centerCrop()
+                            .placeholder(R.drawable.video)
+                            .error(R.drawable.video)
+                            .into(iconView)
+                    }
+                    mime.startsWith("audio/") -> iconView.setImageResource(R.drawable.audio)
+                    else -> iconView.setImageResource(R.drawable.documents)
+                }
+            }
+        }
 
         holder.itemView.setOnClickListener { onClick(item) }
         holder.itemView.setOnLongClickListener {
@@ -42,22 +76,24 @@ class FileAdapter(
 
     override fun getItemCount() = items.size
 
-    private fun iconForFile(name: String): Int {
-        val lower = name.lowercase()
+    private fun getMimeType(name: String): String {
+        val l = name.lowercase()
         return when {
-            lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") ||
-            lower.endsWith(".gif") || lower.endsWith(".webp") || lower.endsWith(".bmp") ->
-                R.drawable.images
-
-            lower.endsWith(".mp4") || lower.endsWith(".mkv") || lower.endsWith(".avi") ||
-            lower.endsWith(".mov") || lower.endsWith(".webm") || lower.endsWith(".3gp") ->
-                R.drawable.video
-
-            lower.endsWith(".mp3") || lower.endsWith(".wav") || lower.endsWith(".ogg") ||
-            lower.endsWith(".flac") || lower.endsWith(".m4a") || lower.endsWith(".aac") ->
-                R.drawable.audio
-
-            else -> R.drawable.documents
+            l.endsWith(".jpg") || l.endsWith(".jpeg") -> "image/jpeg"
+            l.endsWith(".png") -> "image/png"
+            l.endsWith(".gif") -> "image/gif"
+            l.endsWith(".webp") -> "image/webp"
+            l.endsWith(".bmp") -> "image/bmp"
+            l.endsWith(".mp3") -> "audio/mpeg"
+            l.endsWith(".wav") -> "audio/wav"
+            l.endsWith(".ogg") -> "audio/ogg"
+            l.endsWith(".m4a") -> "audio/mp4"
+            l.endsWith(".mp4") -> "video/mp4"
+            l.endsWith(".mkv") -> "video/x-matroska"
+            l.endsWith(".avi") -> "video/x-msvideo"
+            l.endsWith(".mov") -> "video/quicktime"
+            l.endsWith(".webm") -> "video/webm"
+            else -> "application/octet-stream"
         }
     }
 
