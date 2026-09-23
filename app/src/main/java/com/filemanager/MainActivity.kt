@@ -1,5 +1,6 @@
 package com.filemanager
 
+import android.app.Activity
 import android.app.PendingIntent
 import android.content.ContentValues
 import android.content.Intent
@@ -11,6 +12,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.StatFs
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.Settings
 import android.text.Editable
@@ -23,6 +25,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
+import androidx.documentfile.provider.DocumentFile
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -31,6 +34,10 @@ import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
+    companion object {
+        private const val REQ_SAF = 1001
+    }
+
     private lateinit var recycler: RecyclerView
     private lateinit var txtPath: TextView
     private lateinit var txtInternalInfo: TextView
@@ -38,7 +45,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var editSearch: EditText
     private lateinit var prefs: SharedPreferences
 
-    // Path root DINAMICO
     private val rootInternal: String
         get() = if (File("/storage/emulated/0").exists()) {
             "/storage/emulated/0"
@@ -59,6 +65,10 @@ class MainActivity : AppCompatActivity() {
     private var clipboardPath: String? = null
     private var clipboardAction: String? = null
 
+    // SAF
+    private var safTreeUri: Uri? = null
+    private var pendingSafAction: (() -> Unit)? = null
+
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -72,6 +82,7 @@ class MainActivity : AppCompatActivity() {
         sortBy = prefs.getString("sort_by", "name") ?: "name"
 
         currentPath = rootInternal
+        safTreeUri = prefs.getString("saf_tree_uri", null)?.let { Uri.parse(it) }
 
         recycler = findViewById(R.id.recyclerFiles)
         txtPath = findViewById(R.id.txtPath)
@@ -126,6 +137,72 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         executor.shutdown()
+    }
+
+    // ---------- SAF ----------
+    private fun requestSaf(onGranted: () -> Unit) {
+        if (safTreeUri != null) {
+            onGranted()
+            return
+        }
+        pendingSafAction = onGranted
+
+        // Chiedi permesso SAF per la root (Memoria interna)
+        val uri = Uri.parse("content://com.android.externalstorage.documents/root/primary")
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            putExtra(DocumentsContract.EXTRA_INITIAL_URI, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        try {
+            startActivityForResult(intent, REQ_SAF)
+        } catch (e: Exception) {
+            // Fallback senza EXTRA_INITIAL_URI
+            val fallback = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+            }
+            startActivityForResult(fallback, REQ_SAF)
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_SAF && resultCode == Activity.RESULT_OK) {
+            val uri = data?.data ?: return
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+                safTreeUri = uri
+                prefs.edit().putString("saf_tree_uri", uri.toString()).apply()
+                Toast.makeText(this, "Permesso concesso", Toast.LENGTH_SHORT).show()
+                pendingSafAction?.invoke()
+            } catch (e: Exception) {
+                Toast.makeText(this, "Errore permesso: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+        pendingSafAction = null
+    }
+
+    private fun getSafDocumentFile(path: String): DocumentFile? {
+        val tree = safTreeUri ?: return null
+        val rel = path.removePrefix(rootInternal).trimStart('/')
+        var doc = DocumentFile.fromTreeUri(this, tree) ?: return null
+        if (rel.isEmpty()) return doc
+        val parts = rel.split("/").filter { it.isNotEmpty() }
+        for (part in parts) {
+            doc = doc?.findFile(part) ?: return null
+        }
+        return doc
+    }
+
+    private fun getSafParent(path: String): DocumentFile? {
+        val parent = File(path).parent ?: return null
+        return getSafDocumentFile(parent.absolutePath)
     }
 
     // ---------- PERMESSI ----------
@@ -557,20 +634,36 @@ class MainActivity : AppCompatActivity() {
                 val newName = input.text.toString().trim()
                 if (newName.isEmpty() || newName == item.name) return@setPositiveButton
 
+                // 1. Prova diretto
                 try {
-                    val parent = item.file.parentFile ?: return@setPositiveButton
+                    val parent = item.file.parentFile
                     val newFile = File(parent, newName)
-                    val ok = item.file.renameTo(newFile)
-                    if (ok) {
+                    if (item.file.renameTo(newFile)) {
                         updateInMediaStore(item.path, newFile.absolutePath)
                         scanPath(newFile.absolutePath)
                         Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
                         loadDirectory(currentPath)
-                    } else {
-                        Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
+                        return@setPositiveButton
                     }
-                } catch (e: Exception) {
-                    Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_SHORT).show()
+                } catch (_: Exception) {}
+
+                // 2. Fallback SAF
+                requestSaf {
+                    val doc = getSafDocumentFile(item.path)
+                    if (doc != null) {
+                        try {
+                            if (doc.renameTo(newName)) {
+                                Toast.makeText(this, "Rinominato (SAF)", Toast.LENGTH_SHORT).show()
+                                loadDirectory(currentPath)
+                            } else {
+                                Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
+                            }
+                        } catch (e: Exception) {
+                            Toast.makeText(this, "Errore SAF: ${e.message}", Toast.LENGTH_LONG).show()
+                        }
+                    } else {
+                        Toast.makeText(this, "File non accessibile via SAF", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
             .setNegativeButton("Annulla", null)
@@ -582,33 +675,36 @@ class MainActivity : AppCompatActivity() {
             .setTitle("Elimina")
             .setMessage("Eliminare \"${item.name}\"?")
             .setPositiveButton("Elimina") { _, _ ->
-                try {
-                    val ok = if (item.isDirectory) {
-                        deleteRecursively(item.file)
-                    } else {
-                        item.file.delete()
-                    }
 
-                    if (ok) {
-                        deleteFromMediaStore(item.path)
-                        scanPath(item.path)
-                        Toast.makeText(this, "Eliminato", Toast.LENGTH_SHORT).show()
-                        loadDirectory(currentPath)
-                    } else {
-                        // DEBUG: mostra 5 informazioni sul file
-                        val exists = item.file.exists()
-                        val canRead = item.file.canRead()
-                        val canWrite = item.file.canWrite()
-                        val parentCanWrite = item.file.parentFile?.canWrite() ?: false
+                // 1. Prova diretto
+                val okFile = try {
+                    if (item.isDirectory) deleteRecursively(item.file) else item.file.delete()
+                } catch (e: Exception) { false }
 
-                        Toast.makeText(
-                            this,
-                            "Fail!\nexists=$exists\ncanRead=$canRead\ncanWrite=$canWrite\nparentCanWrite=$parentCanWrite",
-                            Toast.LENGTH_LONG
-                        ).show()
+                if (okFile) {
+                    scanPath(item.path)
+                    Toast.makeText(this, "Eliminato", Toast.LENGTH_SHORT).show()
+                    loadDirectory(currentPath)
+                    return@setPositiveButton
+                }
+
+                // 2. Fallback SAF
+                requestSaf {
+                    val doc = getSafDocumentFile(item.path)
+                    if (doc != null) {
+                        try {
+                            if (doc.delete()) {
+                                Toast.makeText(this, "Eliminato (SAF)", Toast.LENGTH_SHORT).show()
+                                loadDirectory(currentPath)
+                            } else {
+                                Toast.makeText(this, "Impossibile eliminare", Toast.LENGTH_SHORT).show()
+                            }
+                        } catch (e: Exception) {
+                            Toast.makeText(this, "Errore SAF: ${e.message}", Toast.LENGTH_LONG).show()
+                        }
+                    } else {
+                        Toast.makeText(this, "File non accessibile via SAF", Toast.LENGTH_SHORT).show()
                     }
-                } catch (e: Exception) {
-                    Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
             .setNegativeButton("Annulla", null)
@@ -699,18 +795,35 @@ class MainActivity : AppCompatActivity() {
                 val name = input.text.toString().trim()
                 if (name.isEmpty()) return@setPositiveButton
 
+                // 1. Prova diretto
                 try {
                     val newDir = File(currentPath, name)
-                    val ok = newDir.mkdir()
-                    if (ok) {
+                    if (newDir.mkdir()) {
                         scanPath(newDir.absolutePath)
                         Toast.makeText(this, "Cartella creata", Toast.LENGTH_SHORT).show()
                         loadDirectory(currentPath)
-                    } else {
-                        Toast.makeText(this, "Impossibile creare", Toast.LENGTH_SHORT).show()
+                        return@setPositiveButton
                     }
-                } catch (e: Exception) {
-                    Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_SHORT).show()
+                } catch (_: Exception) {}
+
+                // 2. Fallback SAF
+                requestSaf {
+                    val parent = getSafDocumentFile(currentPath)
+                    if (parent != null) {
+                        try {
+                            val newDir = parent.createDirectory(name)
+                            if (newDir != null) {
+                                Toast.makeText(this, "Cartella creata (SAF)", Toast.LENGTH_SHORT).show()
+                                loadDirectory(currentPath)
+                            } else {
+                                Toast.makeText(this, "Impossibile creare", Toast.LENGTH_SHORT).show()
+                            }
+                        } catch (e: Exception) {
+                            Toast.makeText(this, "Errore SAF: ${e.message}", Toast.LENGTH_LONG).show()
+                        }
+                    } else {
+                        Toast.makeText(this, "Cartella non accessibile via SAF", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
             .setNegativeButton("Annulla", null)
@@ -759,16 +872,26 @@ class MainActivity : AppCompatActivity() {
         val options = mutableListOf<String>()
         options.add(if (showHidden) "Nascondi file nascosti" else "Mostra file nascosti")
         if (clipboardPath != null) options.add("Incolla qui")
+        options.add("Rinnova permesso scrittura")
 
         AlertDialog.Builder(this)
             .setTitle("Impostazioni")
             .setItems(options.toTypedArray()) { _, which ->
-                if (which == 0) {
-                    showHidden = !showHidden
-                    prefs.edit().putBoolean("show_hidden", showHidden).apply()
-                    loadDirectory(currentPath)
-                } else if (which == 1 && clipboardPath != null) {
-                    pasteFromClipboard()
+                when (which) {
+                    0 -> {
+                        showHidden = !showHidden
+                        prefs.edit().putBoolean("show_hidden", showHidden).apply()
+                        loadDirectory(currentPath)
+                    }
+                    1 -> if (clipboardPath != null) pasteFromClipboard() else requestSaf { }
+                    2 -> {
+                        // Forza nuovo permesso SAF
+                        safTreeUri = null
+                        prefs.edit().remove("saf_tree_uri").apply()
+                        requestSaf {
+                            Toast.makeText(this, "Permesso rinnovato", Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 }
             }
             .show()
@@ -785,18 +908,4 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun goBack() {
-        if (currentPath == rootInternal) return
-        val parent = File(currentPath).parent
-        if (parent != null && parent.startsWith(rootInternal)) {
-            loadDirectory(parent)
-        }
-    }
-
-    override fun onBackPressed() {
-        if (currentPath != rootInternal) {
-            goBack()
-        } else {
-            super.onBackPressed()
-        }
-    }
-}
+        if
