@@ -8,6 +8,8 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -15,11 +17,15 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.StatFs
+import android.os.storage.StorageManager
+import android.os.storage.StorageVolume
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
+import android.util.TypedValue
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.BaseAdapter
@@ -54,6 +60,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var editSearch: EditText
     private lateinit var prefs: SharedPreferences
     private lateinit var btnPaste: ImageButton
+    private lateinit var storageRow: LinearLayout
 
     private val rootInternal: String
         get() = if (File("/storage/emulated/0").exists()) {
@@ -95,10 +102,10 @@ class MainActivity : AppCompatActivity() {
 
         recycler = findViewById(R.id.recyclerFiles)
         txtPath = findViewById(R.id.txtPath)
-        txtInternalInfo = findViewById(R.id.txtInternalInfo)
         txtSort = findViewById(R.id.txtSort)
         editSearch = findViewById(R.id.editSearch)
         btnPaste = findViewById(R.id.btnPaste)
+        storageRow = findViewById(R.id.storageRow)
 
         editSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -116,19 +123,12 @@ class MainActivity : AppCompatActivity() {
         findViewById<ImageButton>(R.id.btnSettings).setOnClickListener { showSettingsDialog() }
         btnPaste.setOnClickListener { pasteFromClipboard() }
 
-        findViewById<LinearLayout>(R.id.storageCard).setOnClickListener {
-            activeCategory = null
-            searchQuery = ""
-            editSearch.setText("")
-            loadDirectory(rootInternal, resetCategory = true)
-        }
-
         findViewById<LinearLayout>(R.id.catImages).setOnClickListener { setCategory("images") }
         findViewById<LinearLayout>(R.id.catAudio).setOnClickListener { setCategory("audio") }
         findViewById<LinearLayout>(R.id.catVideo).setOnClickListener { setCategory("video") }
         findViewById<LinearLayout>(R.id.catDocs).setOnClickListener { setCategory("documents") }
 
-        updateStorageInfo()
+        updateStorageCards()
         updateSortLabel()
         updatePasteButton()
 
@@ -145,6 +145,7 @@ class MainActivity : AppCompatActivity() {
             loadDirectory(currentPath)
         }
         updatePasteButton()
+        updateStorageCards()
     }
 
     override fun onDestroy() {
@@ -152,9 +153,247 @@ class MainActivity : AppCompatActivity() {
         executor.shutdown()
     }
 
-    private fun updatePasteButton() {
-        btnPaste.visibility = if (clipboardPath != null) View.VISIBLE else View.GONE
+    // ---------- CARD STORAGE (dinamiche) ----------
+
+    private fun updateStorageCards() {
+        storageRow.removeAllViews()
+
+        val volumes = mutableListOf<StorageVolumeInfo>()
+
+        // 1) Memoria interna (sempre)
+        try {
+            val stat = StatFs(Environment.getExternalStorageDirectory().path)
+            val totalBytes = stat.blockCountLong * stat.blockSizeLong
+            val freeBytes = stat.availableBlocksLong * stat.blockSizeLong
+            val usedBytes = totalBytes - freeBytes
+            volumes.add(
+                StorageVolumeInfo(
+                    label = "Memoria interna",
+                    path = rootInternal,
+                    usedBytes = usedBytes,
+                    totalBytes = totalBytes
+                )
+            )
+        } catch (e: Exception) {
+            volumes.add(
+                StorageVolumeInfo(
+                    label = "Memoria interna",
+                    path = rootInternal,
+                    usedBytes = 0L,
+                    totalBytes = 0L
+                )
+            )
+        }
+
+        // 2) Volumi esterni (SD, USB) tramite StorageManager
+        try {
+            val storageManager = getSystemService(STORAGE_SERVICE) as StorageManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                val storageVolumes = storageManager.storageVolumes
+                for (vol in storageVolumes) {
+                    if (vol.isPrimary) continue // salta memoria interna (già aggiunta)
+                    if (vol.isRemovable) {
+                        val path = getVolumePath(vol)
+                        if (path != null && File(path).exists()) {
+                            val stat = StatFs(path)
+                            val totalBytes = stat.blockCountLong * stat.blockSizeLong
+                            val freeBytes = stat.availableBlocksLong * stat.blockSizeLong
+                            val usedBytes = totalBytes - freeBytes
+
+                            val label = vol.getDescription(this) ?: "Storage esterno"
+                            volumes.add(
+                                StorageVolumeInfo(
+                                    label = label,
+                                    path = path,
+                                    usedBytes = usedBytes,
+                                    totalBytes = totalBytes
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // ignora
+        }
+
+        // Crea una card per ogni volume
+        for ((index, vol) in volumes.withIndex()) {
+            val card = createStorageCard(vol)
+            val params = LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+            )
+            if (index > 0) {
+                params.marginStart = (8 * resources.displayMetrics.density).toInt()
+            }
+            card.layoutParams = params
+            storageRow.addView(card)
+        }
     }
+
+    private fun getVolumePath(vol: StorageVolume): String? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+ non espone il path diretto
+            // Proviamo a ricavarlo dall'UUID
+            try {
+                val uuid = vol.uuid
+                if (uuid != null) {
+                    val path = "/storage/$uuid"
+                    if (File(path).exists()) return path
+                }
+            } catch (_: Exception) {}
+        }
+        return try {
+            val method = vol.javaClass.getMethod("getPath")
+            method.invoke(vol) as? String
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun createStorageCard(vol: StorageVolumeInfo): LinearLayout {
+        val density = resources.displayMetrics.density
+
+        val card = LinearLayout(this)
+        card.orientation = LinearLayout.VERTICAL
+        card.setPadding(
+            (12 * density).toInt(),
+            (12 * density).toInt(),
+            (12 * density).toInt(),
+            (12 * density).toInt()
+        )
+        card.isClickable = true
+        card.isFocusable = true
+
+        // Sfondo con angoli tondi
+        val bg = GradientDrawable()
+        bg.setColor(Color.parseColor("#2A2A2A"))
+        bg.cornerRadius = 12 * density
+        card.background = bg
+
+        // Titolo
+        val title = TextView(this)
+        title.text = vol.label
+        title.setTextColor(Color.WHITE)
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        title.setTypeface(null, android.graphics.Typeface.BOLD)
+        card.addView(title)
+
+        // Info GB
+        val info = TextView(this)
+        if (vol.totalBytes > 0) {
+            val usedGb = vol.usedBytes / (1024.0 * 1024.0 * 1024.0)
+            val totalGb = vol.totalBytes / (1024.0 * 1024.0 * 1024.0)
+            info.text = String.format("%.1f GB / %.1f GB", usedGb, totalGb)
+        } else {
+            info.text = "Info non disponibili"
+        }
+        info.setTextColor(Color.parseColor("#CCCCCC"))
+        info.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+        info.setPadding(0, (2 * density).toInt(), 0, 0)
+        card.addView(info)
+
+        // Click → naviga
+        card.setOnClickListener {
+            if (vol.path == rootInternal) {
+                activeCategory = null
+                searchQuery = ""
+                editSearch.setText("")
+                loadDirectory(rootInternal, resetCategory = true)
+            } else {
+                // Prova ad aprire la SD/USB
+                tryAccessExternalVolume(vol.path)
+            }
+        }
+
+        return card
+    }
+
+    private fun tryAccessExternalVolume(path: String) {
+        try {
+            val dir = File(path)
+            if (!dir.exists() || !dir.isDirectory) {
+                Toast.makeText(this, "Volume non accessibile", Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            val files = dir.listFiles()
+            if (files == null) {
+                // Permesso negato → apri SAF per questo volume
+                Toast.makeText(this, "Serve il permesso per accedere a questo volume", Toast.LENGTH_LONG).show()
+                requestSafForPath(path)
+                return
+            }
+
+            // Accessibile → naviga
+            activeCategory = null
+            searchQuery = ""
+            editSearch.setText("")
+            loadDirectory(path, resetCategory = true)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun requestSafForPath(path: String) {
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+            }
+            startActivityForResult(intent, REQ_SAF)
+            pendingSafAction = {
+                // Dopo il permesso, ricarica i volumi
+                updateStorageCards()
+                loadDirectory(path, resetCategory = true)
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "Errore apertura SAF: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // ---------- PERMESSI ----------
+
+    private fun hasStoragePermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun requestStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                intent.data = Uri.parse("package:$packageName")
+                startActivity(intent)
+            } catch (e: Exception) {
+                val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                startActivity(intent)
+            }
+            Toast.makeText(this, "Attiva \"Gestisci tutti i file\"", Toast.LENGTH_LONG).show()
+        } else {
+            requestPermissions(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE), 100)
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (hasStoragePermission()) {
+            loadDirectory(currentPath)
+        }
+    }
+
+    // ---------- SAF ----------
 
     private fun requestSaf(onGranted: () -> Unit) {
         if (safTreeUri != null) {
@@ -214,55 +453,7 @@ class MainActivity : AppCompatActivity() {
         return doc
     }
 
-    private fun hasStoragePermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            Environment.isExternalStorageManager()
-        } else {
-            checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
-                android.content.pm.PackageManager.PERMISSION_GRANTED
-        }
-    }
-
-    private fun requestStoragePermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
-                intent.data = Uri.parse("package:$packageName")
-                startActivity(intent)
-            } catch (e: Exception) {
-                val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                startActivity(intent)
-            }
-            Toast.makeText(this, "Attiva \"Gestisci tutti i file\"", Toast.LENGTH_LONG).show()
-        } else {
-            requestPermissions(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE), 100)
-        }
-    }
-
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (hasStoragePermission()) {
-            loadDirectory(currentPath)
-        }
-    }
-
-    private fun updateStorageInfo() {
-        try {
-            val stat = StatFs(Environment.getExternalStorageDirectory().path)
-            val totalBytes = stat.blockCountLong * stat.blockSizeLong
-            val freeBytes = stat.availableBlocksLong * stat.blockSizeLong
-            val usedBytes = totalBytes - freeBytes
-            val totalGb = totalBytes / (1024.0 * 1024.0 * 1024.0)
-            val usedGb = usedBytes / (1024.0 * 1024.0 * 1024.0)
-            txtInternalInfo.text = String.format("%.1f GB / %.1f GB", usedGb, totalGb)
-        } catch (e: Exception) {
-            txtInternalInfo.text = "Info non disponibili"
-        }
-    }
+    // ---------- LETTURA DIRECTORY ----------
 
     private fun loadDirectory(path: String, resetCategory: Boolean = false) {
         currentPath = path
@@ -472,6 +663,8 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    // ---------- APERTURA FILE ----------
+
     private fun getCategoryKey(mimeType: String): String {
         return when {
             mimeType.startsWith("image/") -> "image"
@@ -641,6 +834,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- MENU CONTESTUALE ----------
+
     private fun showItemMenu(item: FileItem) {
         val options = mutableListOf<String>()
         options.add("Apri")
@@ -696,6 +891,8 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
+
+    // ---------- COPIA/INCOLLA ----------
 
     private fun pasteFromClipboard() {
         val srcPath = clipboardPath
@@ -878,6 +1075,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- RINOMINA / ELIMINA ----------
+
     private fun renameItem(item: FileItem) {
         val input = EditText(this)
         input.setText(item.name)
@@ -973,6 +1172,8 @@ class MainActivity : AppCompatActivity() {
         return deleted
     }
 
+    // ---------- MEDIASTORE ----------
+
     private fun deleteFromMediaStore(path: String) {
         try {
             if (File(path).isDirectory) return
@@ -1018,6 +1219,8 @@ class MainActivity : AppCompatActivity() {
             sendBroadcast(intent)
         } catch (_: Exception) {}
     }
+
+    // ---------- ALTRO ----------
 
     private fun showItemInfo(item: FileItem) {
         val info = buildString {
@@ -1157,6 +1360,9 @@ class MainActivity : AppCompatActivity() {
         val parent = File(currentPath).parent
         if (parent != null && parent.startsWith(rootInternal)) {
             loadDirectory(parent)
+        } else if (currentPath.startsWith("/storage/") || currentPath.startsWith("/mnt/")) {
+            // Siamo in un volume esterno → torna alla home
+            loadDirectory(rootInternal, resetCategory = true)
         }
     }
 
@@ -1167,4 +1373,13 @@ class MainActivity : AppCompatActivity() {
             super.onBackPressed()
         }
     }
+
+    // ---------- DATA CLASS ----------
+
+    data class StorageVolumeInfo(
+        val label: String,
+        val path: String,
+        val usedBytes: Long,
+        val totalBytes: Long
+    )
 }
