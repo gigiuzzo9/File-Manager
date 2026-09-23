@@ -40,7 +40,7 @@
             android:contentDescription="Impostazioni" />
     </LinearLayout>
 
-    <!-- BARRA SELEZIONE -->
+    <!-- BARRA SELEZIONE MULTIPLA -->
     <LinearLayout
         android:id="@+id/selectionBar"
         android:layout_width="match_parent"
@@ -80,20 +80,12 @@
             android:contentDescription="Copia" />
 
         <ImageButton
-            android:id="@+id/btnSelCut"
+            android:id="@+id/btnSelPaste"
             android:layout_width="44dp"
             android:layout_height="44dp"
-            android:src="@android:drawable/ic_menu_edit"
+            android:src="@android:drawable/ic_menu_save"
             android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Taglia" />
-
-        <ImageButton
-            android:id="@+id/btnSelShare"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:src="@android:drawable/ic_menu_share"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Condividi" />
+            android:contentDescription="Incolla" />
 
         <ImageButton
             android:id="@+id/btnSelDelete"
@@ -102,6 +94,14 @@
             android:src="@android:drawable/ic_menu_delete"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Elimina" />
+
+        <ImageButton
+            android:id="@+id/btnSelMore"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@android:drawable/ic_menu_more"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Altre opzioni" />
     </LinearLayout>
 
     <!-- CATEGORIE -->
@@ -268,17 +268,6 @@
                 android:textSize="13sp"
                 android:paddingStart="6dp" />
         </LinearLayout>
-
-        <ImageButton
-            android:id="@+id/btnPaste"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:src="@android:drawable/ic_menu_save"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:scaleType="fitCenter"
-            android:padding="8dp"
-            android:visibility="gone"
-            android:contentDescription="Incolla" />
 
         <ImageButton
             android:id="@+id/btnViewToggle"
