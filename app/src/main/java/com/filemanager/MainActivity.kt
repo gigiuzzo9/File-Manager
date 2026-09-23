@@ -433,33 +433,43 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    // ---------- APERTURA FILE CON PICKER PERSONALIZZATO + ICONE ----------
+    // ---------- APERTURA FILE: MEMORIZZAZIONE PER CATEGORIA ----------
+
+    private fun getCategoryKey(mimeType: String): String {
+        return when {
+            mimeType.startsWith("image/") -> "image"
+            mimeType.startsWith("video/") -> "video"
+            mimeType.startsWith("audio/") -> "audio"
+            mimeType.startsWith("text/") -> "text"
+            else -> "document"
+        }
+    }
 
     private fun openFileWithDefault(item: FileItem) {
         val mimeType = getMimeType(item.name)
+        val categoryKey = getCategoryKey(mimeType)
 
-        val savedPackage = prefs.getString("app_for_$mimeType", null)
+        val savedPackage = prefs.getString("app_for_$categoryKey", null)
         if (savedPackage != null) {
-            if (tryOpenWithPackage(item, savedPackage)) {
+            if (tryOpenWithPackage(item, savedPackage, mimeType)) {
                 return
             } else {
-                prefs.edit().remove("app_for_$mimeType").apply()
+                prefs.edit().remove("app_for_$categoryKey").apply()
             }
         }
 
-        showCustomAppPicker(item, mimeType)
+        showCustomAppPicker(item, mimeType, categoryKey)
     }
 
-    private fun tryOpenWithPackage(item: FileItem, packageName: String): Boolean {
+    private fun tryOpenWithPackage(item: FileItem, packageName: String, mimeType: String): Boolean {
         return try {
             val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
             val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, getMimeType(item.name))
+                setDataAndType(uri, mimeType)
                 setPackage(packageName)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            // Concede permesso di lettura esplicito al package
             grantUriPermission(packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             startActivity(intent)
             true
@@ -468,7 +478,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showCustomAppPicker(item: FileItem, mimeType: String) {
+    private fun showCustomAppPicker(item: FileItem, mimeType: String, categoryKey: String) {
         try {
             val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
             val probeIntent = Intent(Intent.ACTION_VIEW).apply {
@@ -486,12 +496,11 @@ class MainActivity : AppCompatActivity() {
 
             if (filtered.size == 1) {
                 val app = filtered.first()
-                prefs.edit().putString("app_for_$mimeType", app.activityInfo.packageName).apply()
-                openWithResolveInfo(item, app, uri)
+                prefs.edit().putString("app_for_$categoryKey", app.activityInfo.packageName).apply()
+                openWithResolveInfo(item, app, uri, mimeType)
                 return
             }
 
-            // Adapter con icona + nome
             val adapter = object : BaseAdapter() {
                 override fun getCount() = filtered.size
                 override fun getItem(position: Int) = filtered[position]
@@ -513,8 +522,8 @@ class MainActivity : AppCompatActivity() {
                 .setAdapter(adapter) { _, which ->
                     val chosenApp = filtered[which]
                     val packageChosen = chosenApp.activityInfo.packageName
-                    prefs.edit().putString("app_for_$mimeType", packageChosen).apply()
-                    openWithResolveInfo(item, chosenApp, uri)
+                    prefs.edit().putString("app_for_$categoryKey", packageChosen).apply()
+                    openWithResolveInfo(item, chosenApp, uri, mimeType)
                 }
                 .setNegativeButton("Annulla", null)
                 .show()
@@ -524,15 +533,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun openWithResolveInfo(item: FileItem, app: ResolveInfo, uri: Uri) {
+    private fun openWithResolveInfo(item: FileItem, app: ResolveInfo, uri: Uri, mimeType: String) {
         try {
             val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, getMimeType(item.name))
+                setDataAndType(uri, mimeType)
                 setComponent(ComponentName(app.activityInfo.packageName, app.activityInfo.name))
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            // Concede permesso di lettura esplicito al package
             grantUriPermission(app.activityInfo.packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             startActivity(intent)
         } catch (e: Exception) {
@@ -542,8 +550,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun openFileWithPicker(item: FileItem) {
         val mimeType = getMimeType(item.name)
-        prefs.edit().remove("app_for_$mimeType").apply()
-        showCustomAppPicker(item, mimeType)
+        val categoryKey = getCategoryKey(mimeType)
+        prefs.edit().remove("app_for_$categoryKey").apply()
+        showCustomAppPicker(item, mimeType, categoryKey)
     }
 
     private fun getMimeType(name: String): String {
