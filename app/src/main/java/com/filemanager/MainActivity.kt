@@ -47,7 +47,6 @@ class MainActivity : AppCompatActivity() {
     private var searchQuery: String = ""
     private var activeCategory: String? = null
 
-    // Executor per la scansione in background
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -181,7 +180,7 @@ class MainActivity : AppCompatActivity() {
 
         executor.execute {
             val dir = File(path)
-            val result = if (!dir.exists() || !dir.isDirectory) {
+            val result: List<FileItem>? = if (!dir.exists() || !dir.isDirectory) {
                 null
             } else {
                 val files = dir.listFiles()
@@ -257,7 +256,6 @@ class MainActivity : AppCompatActivity() {
 
         activeCategory = cat
         txtPath.text = "Filtro: $cat"
-        recycler.adapter = FileAdapter(emptyList(), isGrid, {}, {})
         Toast.makeText(this, "Ricerca in corso...", Toast.LENGTH_SHORT).show()
 
         executor.execute {
@@ -563,4 +561,25 @@ class MainActivity : AppCompatActivity() {
         if (bytes < 1024) return "$bytes B"
         val kb = bytes / 1024.0
         if (kb < 1024) return String.format("%.1f KB", kb)
-        val mb
+        val mb = kb / 1024.0
+        if (mb < 1024) return String.format("%.1f MB", mb)
+        val gb = mb / 1024.0
+        return String.format("%.1f GB", gb)
+    }
+
+    private fun goBack() {
+        if (currentPath == ROOT_INTERNAL) return
+        val parent = File(currentPath).parent
+        if (parent != null && parent.startsWith(ROOT_INTERNAL)) {
+            loadDirectory(parent)
+        }
+    }
+
+    override fun onBackPressed() {
+        if (currentPath != ROOT_INTERNAL) {
+            goBack()
+        } else {
+            super.onBackPressed()
+        }
+    }
+}
