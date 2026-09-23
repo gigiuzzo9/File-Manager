@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 void main() {
   runApp(const FileManagerApp());
@@ -75,109 +74,41 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+class _HomePageState extends State<HomePage> {
   static const String ROOT = '/storage/emulated/0';
 
   String currentPath = ROOT;
   List<FileSystemEntity> items = [];
   bool isGridView = false;
-  bool canRead = false;
-  bool isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _tryLoad();
-    });
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _tryLoad();
-    }
-  }
-
-  // ---------- LOGICA PERMESSI ----------
-  // Non chiediamo a permission_handler "ho il permesso?".
-  // Proviamo DIRETTAMENTE a leggere la cartella.
-  // Se funziona → permesso ok. Se no → chiediamo.
-  Future<void> _tryLoad() async {
-    setState(() => isLoading = true);
-
-    // Tentativo 1: prova a leggere la root
-    if (_canReadDirectory(ROOT)) {
-      setState(() {
-        canRead = true;
-        isLoading = false;
-      });
-      _loadDirectory(ROOT);
-      return;
-    }
-
-    // Tentativo 2: chiedi il permesso
-    await Permission.manageExternalStorage.request();
-
-    // Tentativo 3: riprova a leggere
-    if (_canReadDirectory(ROOT)) {
-      setState(() {
-        canRead = true;
-        isLoading = false;
-      });
-      _loadDirectory(ROOT);
-      return;
-    }
-
-    // Tentativo 4: apri le impostazioni
-    await openAppSettings();
-
-    // Tentativo 5: alla prossima apertura ricontrolla
-    setState(() {
-      canRead = false;
-      isLoading = false;
-    });
-  }
-
-  bool _canReadDirectory(String path) {
-    try {
-      final dir = Directory(path);
-      if (!dir.existsSync()) return false;
-      dir.listSync().take(1); // prova a leggere almeno un elemento
-      return true;
-    } catch (e) {
-      return false;
-    }
+    _loadDirectory(ROOT);
   }
 
   void _loadDirectory(String path) {
+    List<FileSystemEntity> list = [];
     try {
       final dir = Directory(path);
-      final list = dir.listSync();
-      list.sort((a, b) {
-        final aIsDir = a is Directory;
-        final bIsDir = b is Directory;
-        if (aIsDir && !bIsDir) return -1;
-        if (!aIsDir && bIsDir) return 1;
-        return a.path.split('/').last.toLowerCase()
-            .compareTo(b.path.split('/').last.toLowerCase());
-      });
-      setState(() {
-        currentPath = path;
-        items = list;
-      });
-    } catch (e) {
-      setState(() {
-        items = [];
-      });
+      if (dir.existsSync()) {
+        list = dir.listSync();
+        list.sort((a, b) {
+          final aIsDir = a is Directory;
+          final bIsDir = b is Directory;
+          if (aIsDir && !bIsDir) return -1;
+          if (!aIsDir && bIsDir) return 1;
+          return a.path.split('/').last.toLowerCase()
+              .compareTo(b.path.split('/').last.toLowerCase());
+        });
+      }
+    } catch (_) {
+      list = [];
     }
+    setState(() {
+      currentPath = path;
+      items = list;
+    });
   }
 
   String _iconFor(FileSystemEntity item) {
@@ -245,58 +176,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _tryLoad,
+            onPressed: () => _loadDirectory(currentPath),
           ),
         ],
       ),
-      body: isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : !canRead
-              ? _buildPermissionScreen()
-              : items.isEmpty
-                  ? const Center(child: Text('Cartella vuota'))
-                  : isGridView
-                      ? _buildGrid()
-                      : _buildList(),
-    );
-  }
-
-  Widget _buildPermissionScreen() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.folder_off, size: 64, color: Colors.grey),
-            const SizedBox(height: 24),
-            const Text(
-              'Permesso "Gestisci tutti i file" necessario',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'Apri le impostazioni e attiva:\n'
-              '"File e media" → "Consenti gestione di tutti i file"',
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: () async {
-                await openAppSettings();
-              },
-              icon: const Icon(Icons.settings),
-              label: const Text('Apri Impostazioni'),
-            ),
-            const SizedBox(height: 12),
-            TextButton(
-              onPressed: _tryLoad,
-              child: const Text('Ho attivato il permesso, ricontrolla'),
-            ),
-          ],
-        ),
-      ),
+      body: items.isEmpty
+          ? const Center(child: Text('Cartella vuota'))
+          : isGridView
+              ? _buildGrid()
+              : _buildList(),
     );
   }
 
