@@ -145,7 +145,7 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- RIGA 3: Memorie -->
+    <!-- RIGA 3: Memorie (contenitore dinamico) -->
     <LinearLayout
         android:id="@+id/storageRow"
         android:layout_width="match_parent"
@@ -154,35 +154,7 @@
         android:paddingStart="8dp"
         android:paddingEnd="8dp"
         android:paddingBottom="8dp">
-
-        <LinearLayout
-            android:id="@+id/storageCard"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical"
-            android:padding="12dp"
-            android:background="@drawable/storage_background"
-            android:clickable="true"
-            android:focusable="true">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Memoria interna"
-                android:textSize="12sp"
-                android:textStyle="bold"
-                android:textColor="#FFFFFF" />
-
-            <TextView
-                android:id="@+id/txtInternalInfo"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="-- GB / -- GB"
-                android:textSize="11sp"
-                android:textColor="#CCCCCC"
-                android:paddingTop="2dp" />
-        </LinearLayout>
+        <!-- Le card vengono generate dinamicamente dal codice -->
     </LinearLayout>
 
     <!-- RIGA 4: Aggiungi | Ordina | Incolla | Vista -->
