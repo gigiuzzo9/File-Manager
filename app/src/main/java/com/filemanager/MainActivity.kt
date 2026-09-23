@@ -17,6 +17,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -36,9 +37,9 @@ class MainActivity : AppCompatActivity() {
 
     private var showHidden: Boolean = false
     private var isGrid: Boolean = false
-    private var sortBy: String = "name" // name | size | date
+    private var sortBy: String = "name"
     private var searchQuery: String = ""
-    private var activeCategory: String? = null // null | images | audio | video | documents
+    private var activeCategory: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,7 +55,6 @@ class MainActivity : AppCompatActivity() {
         txtInternalInfo = findViewById(R.id.txtInternalInfo)
         editSearch = findViewById(R.id.editSearch)
 
-        // Ricerca
         editSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
@@ -64,14 +64,12 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        // Bottoni
         findViewById<ImageButton>(R.id.btnBack).setOnClickListener { goBack() }
         findViewById<ImageButton>(R.id.btnAddFolder).setOnClickListener { createFolder() }
         findViewById<ImageButton>(R.id.btnSort).setOnClickListener { showSortDialog() }
         findViewById<ImageButton>(R.id.btnViewToggle).setOnClickListener { toggleView() }
         findViewById<ImageButton>(R.id.btnSettings).setOnClickListener { showSettingsDialog() }
 
-        // Categorie
         findViewById<LinearLayout>(R.id.catImages).setOnClickListener { setCategory("images") }
         findViewById<LinearLayout>(R.id.catAudio).setOnClickListener { setCategory("audio") }
         findViewById<LinearLayout>(R.id.catVideo).setOnClickListener { setCategory("video") }
@@ -186,7 +184,6 @@ class MainActivity : AppCompatActivity() {
         applyFilters()
     }
 
-    // ---------- FILTRI ----------
     private fun applyFilters() {
         var list = allItems.toList()
 
@@ -240,7 +237,7 @@ class MainActivity : AppCompatActivity() {
             isGrid = isGrid,
             onClick = { item ->
                 if (item.isDirectory) loadDirectory(item.path)
-                else Toast.makeText(this, "File: ${item.name}", Toast.LENGTH_SHORT).show()
+                else openFile(item)
             },
             onLongClick = { item ->
                 showItemMenu(item)
@@ -248,21 +245,70 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    // ---------- APRI FILE ----------
+    private fun openFile(item: FileItem) {
+        try {
+            val uri = FileProvider.getUriForFile(
+                this,
+                "$packageName.provider",
+                item.file
+            )
+
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, getMimeType(item.name))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+
+            startActivity(Intent.createChooser(intent, "Apri con..."))
+        } catch (e: Exception) {
+            Toast.makeText(this, "Nessuna app per aprire questo file", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun getMimeType(name: String): String {
+        val l = name.lowercase()
+        return when {
+            l.endsWith(".jpg") || l.endsWith(".jpeg") -> "image/jpeg"
+            l.endsWith(".png") -> "image/png"
+            l.endsWith(".gif") -> "image/gif"
+            l.endsWith(".webp") -> "image/webp"
+            l.endsWith(".bmp") -> "image/bmp"
+            l.endsWith(".mp3") -> "audio/mpeg"
+            l.endsWith(".wav") -> "audio/wav"
+            l.endsWith(".ogg") -> "audio/ogg"
+            l.endsWith(".m4a") -> "audio/mp4"
+            l.endsWith(".mp4") -> "video/mp4"
+            l.endsWith(".mkv") -> "video/x-matroska"
+            l.endsWith(".avi") -> "video/x-msvideo"
+            l.endsWith(".mov") -> "video/quicktime"
+            l.endsWith(".webm") -> "video/webm"
+            l.endsWith(".pdf") -> "application/pdf"
+            l.endsWith(".zip") -> "application/zip"
+            l.endsWith(".rar") -> "application/x-rar-compressed"
+            l.endsWith(".txt") -> "text/plain"
+            l.endsWith(".html") || l.endsWith(".htm") -> "text/html"
+            l.endsWith(".json") -> "application/json"
+            l.endsWith(".xml") -> "text/xml"
+            l.endsWith(".doc") -> "application/msword"
+            l.endsWith(".docx") -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            l.endsWith(".xls") -> "application/vnd.ms-excel"
+            l.endsWith(".xlsx") -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            l.endsWith(".ppt") -> "application/vnd.ms-powerpoint"
+            l.endsWith(".pptx") -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            l.endsWith(".apk") -> "application/vnd.android.package-archive"
+            else -> "*/*"
+        }
+    }
+
     // ---------- MENU CONTESTUALE ----------
     private fun showItemMenu(item: FileItem) {
-        val options = arrayOf(
-            "Apri",
-            "Rinomina",
-            "Elimina",
-            "Proprietà"
-        )
-
+        val options = arrayOf("Apri", "Rinomina", "Elimina", "Proprietà")
         AlertDialog.Builder(this)
             .setTitle(item.name)
             .setItems(options) { _, which ->
                 when (which) {
-                    0 -> if (item.isDirectory) loadDirectory(item.path)
-                         else Toast.makeText(this, "Apro: ${item.name}", Toast.LENGTH_SHORT).show()
+                    0 -> if (item.isDirectory) loadDirectory(item.path) else openFile(item)
                     1 -> renameItem(item)
                     2 -> deleteItem(item)
                     3 -> showItemInfo(item)
@@ -274,7 +320,6 @@ class MainActivity : AppCompatActivity() {
     private fun renameItem(item: FileItem) {
         val input = EditText(this)
         input.setText(item.name)
-
         AlertDialog.Builder(this)
             .setTitle("Rinomina")
             .setView(input)
@@ -328,7 +373,6 @@ class MainActivity : AppCompatActivity() {
     private fun createFolder() {
         val input = EditText(this)
         input.hint = "Nome cartella"
-
         AlertDialog.Builder(this)
             .setTitle("Nuova cartella")
             .setView(input)
@@ -401,7 +445,6 @@ class MainActivity : AppCompatActivity() {
         return String.format("%.1f GB", gb)
     }
 
-    // ---------- NAVIGAZIONE ----------
     private fun goBack() {
         if (currentPath == "/storage/emulated/0") return
         val parent = File(currentPath).parent
