@@ -1,5 +1,6 @@
 package com.filemanager
 
+import android.graphics.Color
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -13,6 +14,8 @@ import java.io.File
 class FileAdapter(
     private val items: List<FileItem>,
     private val isGrid: Boolean,
+    private val selectionMode: Boolean,
+    private val selectedPaths: Set<String>,
     private val onClick: (FileItem) -> Unit,
     private val onLongClick: (FileItem) -> Unit
 ) : RecyclerView.Adapter<FileAdapter.VH>() {
@@ -36,38 +39,53 @@ class FileAdapter(
 
         val iconView = holder.icon
         if (iconView != null) {
-            if (item.isDirectory) {
-                iconView.setImageResource(R.drawable.folder)
-            } else {
-                val mime = getMimeType(item.name)
-                when {
-                    mime.startsWith("image/") -> {
-                        // Anteprima per le immagini
-                        Glide.with(iconView.context)
-                            .load(File(item.path))
-                            .diskCacheStrategy(DiskCacheStrategy.ALL)
-                            .centerCrop()
-                            .placeholder(R.drawable.images)
-                            .error(R.drawable.images)
-                            .into(iconView)
+            when {
+                item.isDirectory -> {
+                    iconView.setImageResource(R.drawable.folder)
+                }
+                item.name.lowercase().endsWith(".zip") -> {
+                    iconView.setImageResource(R.drawable.zip)
+                }
+                else -> {
+                    val mime = getMimeType(item.name)
+                    when {
+                        mime.startsWith("image/") -> {
+                            Glide.with(iconView.context)
+                                .load(File(item.path))
+                                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                                .centerCrop()
+                                .placeholder(R.drawable.images)
+                                .error(R.drawable.images)
+                                .into(iconView)
+                        }
+                        mime.startsWith("video/") -> {
+                            Glide.with(iconView.context)
+                                .load(File(item.path))
+                                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                                .centerCrop()
+                                .placeholder(R.drawable.video)
+                                .error(R.drawable.video)
+                                .into(iconView)
+                        }
+                        mime.startsWith("audio/") -> iconView.setImageResource(R.drawable.audio)
+                        else -> iconView.setImageResource(R.drawable.documents)
                     }
-                    mime.startsWith("video/") -> {
-                        // Anteprima per i video (frame iniziale)
-                        Glide.with(iconView.context)
-                            .load(File(item.path))
-                            .diskCacheStrategy(DiskCacheStrategy.ALL)
-                            .centerCrop()
-                            .placeholder(R.drawable.video)
-                            .error(R.drawable.video)
-                            .into(iconView)
-                    }
-                    mime.startsWith("audio/") -> iconView.setImageResource(R.drawable.audio)
-                    else -> iconView.setImageResource(R.drawable.documents)
                 }
             }
         }
 
+        // Evidenzia se selezionato
+        val isSelected = selectionMode && selectedPaths.contains(item.path)
+        if (isSelected) {
+            holder.itemView.setBackgroundColor(Color.parseColor("#333B82F6"))
+        } else {
+            holder.itemView.setBackgroundColor(Color.TRANSPARENT)
+        }
+
+        // Click normale
         holder.itemView.setOnClickListener { onClick(item) }
+
+        // Long click
         holder.itemView.setOnLongClickListener {
             onLongClick(item)
             true
