@@ -88,7 +88,8 @@ class MainActivity : AppCompatActivity() {
     private var searchQuery: String = ""
     private var activeCategory: String? = null
 
-    private var clipboardPath: String? = null
+    // Appunti: lista di path + azione (copy/cut)
+    private val clipboardPaths = mutableListOf<String>()
     private var clipboardAction: String? = null
 
     private var selectionMode: Boolean = false
@@ -182,7 +183,7 @@ class MainActivity : AppCompatActivity() {
     // ---------- PULSANTE INCOLLA IN actionsRow ----------
 
     private fun updatePasteButton() {
-        val shouldShow = !selectionMode && clipboardPath != null
+        val shouldShow = !selectionMode && clipboardPaths.isNotEmpty()
         btnPaste.visibility = if (shouldShow) View.VISIBLE else View.GONE
     }
 
@@ -228,7 +229,7 @@ class MainActivity : AppCompatActivity() {
             val count = selectedPaths.size
             txtSelectionCount.text = if (count == 1) "1 selezionato" else "$count selezionati"
 
-            btnSelPaste.visibility = if (clipboardPath != null) View.VISIBLE else View.GONE
+            btnSelPaste.visibility = if (clipboardPaths.isNotEmpty()) View.VISIBLE else View.GONE
         } else {
             searchBar.visibility = View.VISIBLE
             selectionBar.visibility = View.GONE
@@ -304,8 +305,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun copySelectedFiles(action: String) {
         if (selectedPaths.isEmpty()) return
-        val first = selectedPaths.first()
-        clipboardPath = first
+        clipboardPaths.clear()
+        clipboardPaths.addAll(selectedPaths)
         clipboardAction = action
         Toast.makeText(
             this,
@@ -1480,92 +1481,94 @@ class MainActivity : AppCompatActivity() {
     // ---------- COPIA/INCOLLA ----------
 
     private fun pasteFromClipboard() {
-        val srcPath = clipboardPath
-        if (srcPath == null) {
+        if (clipboardPaths.isEmpty()) {
             Toast.makeText(this, "Niente negli appunti", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val src = File(srcPath)
-        if (!src.exists()) {
+        val srcPaths = clipboardPaths.toList()
+        val action = clipboardAction
+        val dstDir = File(currentPath)
+
+        // Filtra sorgenti esistenti
+        val existingSrc = srcPaths.filter { File(it).exists() }
+        if (existingSrc.isEmpty()) {
             AlertDialog.Builder(this)
                 .setTitle("Errore Incolla")
-                .setMessage("File originale non trovato:\n$srcPath")
+                .setMessage("Nessun file originale trovato")
                 .setPositiveButton("OK", null)
                 .show()
-            clipboardPath = null
+            clipboardPaths.clear()
             clipboardAction = null
             exitSelectionMode()
             updatePasteButton()
             return
         }
 
-        val dst = File(currentPath, src.name)
-
-        if (dst.absolutePath == src.absolutePath) {
-            AlertDialog.Builder(this)
-                .setTitle("Errore Incolla")
-                .setMessage("Origine e destinazione coincidono:\n${src.absolutePath}")
-                .setPositiveButton("OK", null)
-                .show()
-            return
-        }
-
-        if (dst.exists()) {
-            AlertDialog.Builder(this)
-                .setTitle("Errore Incolla")
-                .setMessage("Il file esiste già:\n${dst.absolutePath}")
-                .setPositiveButton("OK", null)
-                .show()
-            return
-        }
-
-        val action = clipboardAction
         Toast.makeText(this, "Copia in corso...", Toast.LENGTH_SHORT).show()
 
         executor.execute {
-            var ok = false
+            var copied = 0
             var errorMsg = ""
 
-            try {
-                ok = copyViaSaf(src, dst)
-                if (!ok) errorMsg = "SAF: copia fallita"
-            } catch (e: Exception) {
-                ok = false
-                errorMsg = "SAF: ${e.message}"
-            }
+            for (srcPath in existingSrc) {
+                val src = File(srcPath)
 
-            if (!ok) {
+                // Calcola nome destinazione (rinomina se stessa cartella o nome esistente)
+                var dstName = src.name
+                var dst = File(dstDir, dstName)
+
+                if (dst.absolutePath == src.absolutePath || dst.exists()) {
+                    dstName = generateUniqueName(dstDir, src.name)
+                    dst = File(dstDir, dstName)
+                }
+
+                var ok = false
+
+                // Tentativo 1: SAF
                 try {
-                    if (src.isDirectory) {
-                        copyDirectoryRecursive(src, dst)
-                    } else {
-                        copyFile(src, dst)
+                    ok = copyViaSaf(src, dst)
+                } catch (_: Exception) {}
+
+                // Tentativo 2: File diretto
+                if (!ok) {
+                    try {
+                        if (src.isDirectory) {
+                            copyDirectoryRecursive(src, dst)
+                        } else {
+                            copyFile(src, dst)
+                        }
+                        ok = true
+                    } catch (e: Exception) {
+                        errorMsg += "\n${src.name}: ${e.message}"
                     }
-                    ok = true
-                    errorMsg = ""
-                } catch (e: Exception) {
-                    ok = false
-                    errorMsg += " | File: ${e.message}"
+                }
+
+                if (ok) {
+                    copied++
+                    scanPath(dst.absolutePath)
+
+                    // Se "cut", elimina l'originale (solo se dst != src)
+                    if (action == "cut" && dst.absolutePath != src.absolutePath) {
+                        try {
+                            if (src.isDirectory) src.deleteRecursively() else src.delete()
+                        } catch (_: Exception) {}
+                    }
                 }
             }
 
-            if (ok && action == "cut") {
-                try {
-                    if (src.isDirectory) src.deleteRecursively() else src.delete()
-                } catch (_: Exception) {}
-            }
-
-            if (ok) scanPath(dst.absolutePath)
+            val finalCopied = copied
+            val finalErr = errorMsg
+            val wasCut = action == "cut"
 
             mainHandler.post {
-                if (ok) {
+                if (finalCopied > 0) {
                     Toast.makeText(
                         this,
-                        if (action == "cut") "Spostato: ${src.name}" else "Copiato: ${src.name}",
+                        if (wasCut) "Spostati $finalCopied file" else "Copiati $finalCopied file",
                         Toast.LENGTH_SHORT
                     ).show()
-                    clipboardPath = null
+                    clipboardPaths.clear()
                     clipboardAction = null
                     exitSelectionMode()
                     updatePasteButton()
@@ -1573,12 +1576,33 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     AlertDialog.Builder(this)
                         .setTitle("Errore Incolla")
-                        .setMessage("SRC: ${src.absolutePath}\nDST: ${dst.absolutePath}\n\nErrore:\n$errorMsg")
+                        .setMessage("Nessun file copiato.\n$finalErr")
                         .setPositiveButton("OK", null)
                         .show()
                 }
             }
         }
+    }
+
+    private fun generateUniqueName(dir: File, originalName: String): String {
+        val dotIndex = originalName.lastIndexOf('.')
+        val baseName: String
+        val extension: String
+        if (dotIndex > 0) {
+            baseName = originalName.substring(0, dotIndex)
+            extension = originalName.substring(dotIndex)
+        } else {
+            baseName = originalName
+            extension = ""
+        }
+
+        var counter = 1
+        var candidate = "${baseName}_$counter$extension"
+        while (File(dir, candidate).exists()) {
+            counter++
+            candidate = "${baseName}_$counter$extension"
+        }
+        return candidate
     }
 
     private fun copyViaSaf(src: File, dst: File): Boolean {
