@@ -80,16 +80,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   String currentPath = ROOT;
   List<FileSystemEntity> items = [];
-  bool hasPermission = false;
   bool isGridView = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Aspetta un attimo per far montare la UI, poi chiedi i permessi
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkPermission();
+      _checkAndLoad();
     });
   }
 
@@ -99,37 +97,30 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  // Quando l'utente torna dall'app impostazioni, ricontrolla
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _checkPermission(silent: true);
+      _checkAndLoad();
     }
   }
 
-  Future<void> _checkPermission({bool silent = false}) async {
-    // 1) Controlla se il permesso è già concesso
+  Future<void> _checkAndLoad() async {
+    // Controlla se il permesso è concesso
     var status = await Permission.manageExternalStorage.status;
 
-    // 2) Se non è concesso, chiedilo
-    if (!status.isGranted && !silent) {
+    // Se non è concesso, chiedilo (popup di sistema)
+    if (!status.isGranted) {
       status = await Permission.manageExternalStorage.request();
     }
 
-    // 3) Se ancora negato, apri le impostazioni di sistema
-    if (!status.isGranted && !silent) {
+    // Se ancora negato, apri direttamente le impostazioni Android
+    if (!status.isGranted) {
       await openAppSettings();
+      return;
     }
 
-    // 4) Controlla di nuovo dopo essere tornati dalle impostazioni
-    status = await Permission.manageExternalStorage.status;
-
-    if (status.isGranted) {
-      setState(() => hasPermission = true);
-      _loadDirectory(currentPath);
-    } else {
-      setState(() => hasPermission = false);
-    }
+    // Permesso ok → carica la directory
+    _loadDirectory(currentPath);
   }
 
   void _loadDirectory(String path) {
@@ -220,54 +211,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ),
         ],
       ),
-      body: !hasPermission
-          ? _buildPermissionScreen()
-          : items.isEmpty
-              ? const Center(child: Text('Cartella vuota'))
-              : isGridView
-                  ? _buildGrid()
-                  : _buildList(),
-    );
-  }
-
-  Widget _buildPermissionScreen() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.folder_off, size: 64, color: Colors.grey),
-            const SizedBox(height: 24),
-            const Text(
-              'Permesso "Gestisci tutti i file" necessario',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'Per leggere i file del dispositivo serve il permesso '
-              '"Gestisci tutti i file".\n\n'
-              'Vai in: Impostazioni → App → File Manager → Autorizzazioni\n'
-              'e attiva "Gestisci tutti i file".',
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: () async {
-                await openAppSettings();
-              },
-              icon: const Icon(Icons.settings),
-              label: const Text('Apri Impostazioni'),
-            ),
-            const SizedBox(height: 12),
-            TextButton(
-              onPressed: () => _checkPermission(),
-              child: const Text('Ho attivato il permesso, ricontrolla'),
-            ),
-          ],
-        ),
-      ),
+      body: items.isEmpty
+          ? const Center(child: CircularProgressIndicator())
+          : isGridView
+              ? _buildGrid()
+              : _buildList(),
     );
   }
 
