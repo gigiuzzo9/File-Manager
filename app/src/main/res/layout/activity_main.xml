@@ -145,7 +145,7 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- RIGA 3: Memorie (cliccabile per andare alla root) -->
+    <!-- RIGA 3: Memorie -->
     <LinearLayout
         android:id="@+id/storageRow"
         android:layout_width="match_parent"
@@ -185,7 +185,7 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- RIGA 4: Solo aggiungi + ordina + vista, centrati -->
+    <!-- RIGA 4: Aggiungi (sx) | Ordina (centro) | Vista (dx) -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -193,7 +193,7 @@
         android:paddingStart="8dp"
         android:paddingEnd="8dp"
         android:paddingBottom="4dp"
-        android:gravity="center">
+        android:gravity="center_vertical">
 
         <ImageButton
             android:id="@+id/btnAddFolder"
@@ -205,15 +205,32 @@
             android:padding="8dp"
             android:contentDescription="Nuova cartella" />
 
-        <ImageButton
+        <LinearLayout
             android:id="@+id/btnSort"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:layout_marginStart="24dp"
-            android:layout_marginEnd="24dp"
-            android:src="@android:drawable/ic_menu_sort_by_size"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Ordina" />
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackground"
+            android:padding="8dp">
+
+            <ImageView
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:src="@android:drawable/ic_menu_sort_by_size"
+                android:contentDescription="" />
+
+            <TextView
+                android:id="@+id/txtSort"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Ordina per Nome"
+                android:textSize="13sp"
+                android:paddingStart="6dp" />
+        </LinearLayout>
 
         <ImageButton
             android:id="@+id/btnViewToggle"
