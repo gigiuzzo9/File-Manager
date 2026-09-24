@@ -331,80 +331,109 @@ class MainActivity : AppCompatActivity() {
     // ---------- MENU ⋮ DELLA SELEZIONE ----------
 
     private fun showSelectionMoreMenu() {
-        if (selectedPaths.isEmpty()) return
+    if (selectedPaths.isEmpty()) return
 
-        val popup = PopupMenu(this, btnSelMore)
-        val count = selectedPaths.size
+    val popup = PopupMenu(this, btnSelMore)
+    val count = selectedPaths.size
 
-        if (count == 1) {
-            val item = getSingleSelectedItem()
-            if (item != null && !item.isDirectory) {
-                popup.menu.add(0, 10, 0, "📂  Apri")
-                popup.menu.add(0, 11, 1, "🔧  Apri con...")
-            }
-        }
+    // Controlla se TUTTI gli elementi visibili sono selezionati
+    val allVisibleSelected = displayedItems.isNotEmpty() &&
+            displayedItems.all { selectedPaths.contains(it.path) }
 
-        popup.menu.add(0, 1, 2, "✂️  Taglia")
-        popup.menu.add(0, 2, 3, "📤  Condividi")
-        popup.menu.add(0, 3, 4, "📦  Comprimi in ZIP")
-
-        if (count == 1) {
-            val path = selectedPaths.first()
-            val item = allItems.find { it.path == path }
-            if (item != null) {
-                popup.menu.add(0, 4, 5, "✏️  Rinomina")
-                if (!item.isDirectory && item.name.lowercase().endsWith(".zip")) {
-                    popup.menu.add(0, 5, 6, "📂  Decomprimi")
-                }
-                popup.menu.add(0, 6, 7, "ℹ️  Proprietà")
-            }
-        }
-
-        popup.setOnMenuItemClickListener { menuItem ->
-            when (menuItem.itemId) {
-                10 -> {
-                    val item = getSingleSelectedItem()
-                    if (item != null) {
-                        exitSelectionMode()
-                        openFileWithDefault(item)
-                    }
-                }
-                11 -> {
-                    val item = getSingleSelectedItem()
-                    if (item != null) {
-                        exitSelectionMode()
-                        openFileWithPicker(item)
-                    }
-                }
-                1 -> copySelectedFiles("cut")
-                2 -> shareSelectedFiles()
-                3 -> comprimiZipSelezioneMultipla()
-                4 -> {
-                    val item = getSingleSelectedItem()
-                    if (item != null) {
-                        exitSelectionMode()
-                        renameItem(item)
-                    }
-                }
-                5 -> {
-                    val item = getSingleSelectedItem()
-                    if (item != null) {
-                        exitSelectionMode()
-                        decomprimiZip(item)
-                    }
-                }
-                6 -> {
-                    val item = getSingleSelectedItem()
-                    if (item != null) {
-                        exitSelectionMode()
-                        showItemInfo(item)
-                    }
-                }
-            }
-            true
-        }
-        popup.show()
+    // Voce "Seleziona tutto" / "Deseleziona tutto" (sempre visibile)
+    if (allVisibleSelected) {
+        popup.menu.add(0, 20, 0, "❌  Deseleziona tutto")
+    } else {
+        popup.menu.add(0, 20, 0, "✅  Seleziona tutto")
     }
+
+    // Se è 1 file singolo (non cartella) → aggiungi "Apri" e "Apri con..."
+    if (count == 1) {
+        val item = getSingleSelectedItem()
+        if (item != null && !item.isDirectory) {
+            popup.menu.add(0, 10, 1, "📂  Apri")
+            popup.menu.add(0, 11, 2, "🔧  Apri con...")
+        }
+    }
+
+    popup.menu.add(0, 1, 3, "✂️  Taglia")
+    popup.menu.add(0, 2, 4, "📤  Condividi")
+    popup.menu.add(0, 3, 5, "📦  Comprimi in ZIP")
+
+    if (count == 1) {
+        val path = selectedPaths.first()
+        val item = allItems.find { it.path == path }
+        if (item != null) {
+            popup.menu.add(0, 4, 6, "✏️  Rinomina")
+            if (!item.isDirectory && item.name.lowercase().endsWith(".zip")) {
+                popup.menu.add(0, 5, 7, "📂  Decomprimi")
+            }
+            popup.menu.add(0, 6, 8, "ℹ️  Proprietà")
+        }
+    }
+
+    popup.setOnMenuItemClickListener { menuItem ->
+        when (menuItem.itemId) {
+            20 -> {
+                // Seleziona tutto / Deseleziona tutto
+                if (allVisibleSelected) {
+                    // Deseleziona tutto
+                    selectedPaths.clear()
+                    updateSelectionUI()
+                    renderList()
+                } else {
+                    // Seleziona tutto
+                    selectedPaths.clear()
+                    for (item in displayedItems) {
+                        selectedPaths.add(item.path)
+                    }
+                    updateSelectionUI()
+                    renderList()
+                }
+            }
+            10 -> {
+                val item = getSingleSelectedItem()
+                if (item != null) {
+                    exitSelectionMode()
+                    openFileWithDefault(item)
+                }
+            }
+            11 -> {
+                val item = getSingleSelectedItem()
+                if (item != null) {
+                    exitSelectionMode()
+                    openFileWithPicker(item)
+                }
+            }
+            1 -> copySelectedFiles("cut")
+            2 -> shareSelectedFiles()
+            3 -> comprimiZipSelezioneMultipla()
+            4 -> {
+                val item = getSingleSelectedItem()
+                if (item != null) {
+                    exitSelectionMode()
+                    renameItem(item)
+                }
+            }
+            5 -> {
+                val item = getSingleSelectedItem()
+                if (item != null) {
+                    exitSelectionMode()
+                    decomprimiZip(item)
+                }
+            }
+            6 -> {
+                val item = getSingleSelectedItem()
+                if (item != null) {
+                    exitSelectionMode()
+                    showItemInfo(item)
+                }
+            }
+        }
+        true
+    }
+    popup.show()
+}
 
     private fun getSingleSelectedItem(): FileItem? {
         if (selectedPaths.size != 1) return null
