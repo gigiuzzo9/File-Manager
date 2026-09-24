@@ -423,11 +423,13 @@
             android:ellipsize="start" />
     </LinearLayout>
 
- <!-- LISTA -->
-<androidx.recyclerview.widget.RecyclerView
-    android:id="@+id/recyclerFiles"
-    android:layout_width="match_parent"
-    android:layout_height="0dp"
-    android:layout_weight="1"
-    android:padding="4dp"
-    android:clipToPadding="false" />
+    <!-- LISTA -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/recyclerFiles"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:padding="4dp"
+        android:clipToPadding="false" />
+
+</LinearLayout>
