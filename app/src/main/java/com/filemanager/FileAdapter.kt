@@ -39,12 +39,17 @@ class FileAdapter(
         // Sotto il nome:
         // - cartella → "N files" (file + sottocartelle al suo interno)
         // - file → dimensione
-        holder.meta?.text = if (item.isDirectory) {
-            val n = item.childrenCount
-            if (n == 1) "1 file" else "$n files"
-        } else {
-            formatSize(item.size)
-        }
+        holder.meta?.text = when {
+    // Risultato di ricerca → mostra il percorso del padre
+    item.searchParentPath.isNotEmpty() -> item.searchParentPath
+    // Cartella → "N files"
+    item.isDirectory -> {
+        val n = item.childrenCount
+        if (n == 1) "1 file" else "$n files"
+    }
+    // File normale → dimensione
+    else -> formatSize(item.size)
+}
 
         val iconView = holder.icon
         if (iconView != null) {
