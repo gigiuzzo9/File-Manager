@@ -336,24 +336,47 @@ class MainActivity : AppCompatActivity() {
         val popup = PopupMenu(this, btnSelMore)
         val count = selectedPaths.size
 
-        popup.menu.add(0, 1, 0, "✂️  Taglia")
-        popup.menu.add(0, 2, 1, "📤  Condividi")
-        popup.menu.add(0, 3, 2, "📦  Comprimi in ZIP")
+        // Se è 1 file singolo (non cartella) → aggiungi "Apri" e "Apri con..."
+        if (count == 1) {
+            val item = getSingleSelectedItem()
+            if (item != null && !item.isDirectory) {
+                popup.menu.add(0, 10, 0, "📂  Apri")
+                popup.menu.add(0, 11, 1, "🔧  Apri con...")
+            }
+        }
+
+        popup.menu.add(0, 1, 2, "✂️  Taglia")
+        popup.menu.add(0, 2, 3, "📤  Condividi")
+        popup.menu.add(0, 3, 4, "📦  Comprimi in ZIP")
 
         if (count == 1) {
             val path = selectedPaths.first()
             val item = allItems.find { it.path == path }
             if (item != null) {
-                popup.menu.add(0, 4, 3, "✏️  Rinomina")
+                popup.menu.add(0, 4, 5, "✏️  Rinomina")
                 if (!item.isDirectory && item.name.lowercase().endsWith(".zip")) {
-                    popup.menu.add(0, 5, 4, "📂  Decomprimi")
+                    popup.menu.add(0, 5, 6, "📂  Decomprimi")
                 }
-                popup.menu.add(0, 6, 5, "ℹ️  Proprietà")
+                popup.menu.add(0, 6, 7, "ℹ️  Proprietà")
             }
         }
 
         popup.setOnMenuItemClickListener { menuItem ->
             when (menuItem.itemId) {
+                10 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) {
+                        exitSelectionMode()
+                        openFileWithDefault(item)
+                    }
+                }
+                11 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) {
+                        exitSelectionMode()
+                        openFileWithPicker(item)
+                    }
+                }
                 1 -> copySelectedFiles("cut")
                 2 -> shareSelectedFiles()
                 3 -> comprimiZipSelezioneMultipla()
@@ -1042,19 +1065,22 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- APERTURA FILE ----------
 
-    private fun getCategoryKey(mimeType: String): String {
+    private fun getCategoryKey(mimeType: String, fileName: String): String {
         return when {
             mimeType.startsWith("image/") -> "image"
             mimeType.startsWith("video/") -> "video"
             mimeType.startsWith("audio/") -> "audio"
-            mimeType.startsWith("text/") -> "text"
-            else -> "document"
+            else -> {
+                // Per documenti, usa l'estensione per non mischiare PDF/XML/DOCX...
+                val ext = fileName.substringAfterLast('.', "").lowercase()
+                if (ext.isNotEmpty()) "ext_$ext" else "document"
+            }
         }
     }
 
     private fun openFileWithDefault(item: FileItem) {
         val mimeType = getMimeType(item.name)
-        val categoryKey = getCategoryKey(mimeType)
+        val categoryKey = getCategoryKey(mimeType, item.name)
 
         val savedPackage = prefs.getString("app_for_$categoryKey", null)
         if (savedPackage != null) {
@@ -1184,6 +1210,13 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Toast.makeText(this, "Errore apertura: ${e.message}", Toast.LENGTH_LONG).show()
         }
+    }
+
+    private fun openFileWithPicker(item: FileItem) {
+        val mimeType = getMimeType(item.name)
+        val categoryKey = getCategoryKey(mimeType, item.name)
+        prefs.edit().remove("app_for_$categoryKey").apply()
+        showCustomAppPicker(item, mimeType, categoryKey)
     }
 
     private fun getMimeType(name: String): String {
@@ -1554,9 +1587,16 @@ class MainActivity : AppCompatActivity() {
                     copied++
                     scanPath(dst.absolutePath)
 
+                    // Se "cut", elimina l'originale (solo se dst != src) con fallback SAF
                     if (action == "cut" && dst.absolutePath != src.absolutePath) {
                         try {
-                            if (src.isDirectory) src.deleteRecursively() else src.delete()
+                            var delOk = if (src.isDirectory) src.deleteRecursively() else src.delete()
+                            if (!delOk) {
+                                val doc = getSafDocumentFile(src.absolutePath)
+                                if (doc != null) {
+                                    delOk = if (doc.isDirectory) deleteDocumentRecursive(doc) else doc.delete()
+                                }
+                            }
                         } catch (_: Exception) {}
                     }
                 }
