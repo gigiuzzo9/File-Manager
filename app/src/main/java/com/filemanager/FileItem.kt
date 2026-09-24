@@ -9,5 +9,6 @@ data class FileItem(
     val isDirectory: Boolean,
     val size: Long,
     val lastModified: Long,
-    val childrenCount: Int = 0
+    val childrenCount: Int = 0,
+    val searchParentPath: String = ""   // ← AGGIUNTO: percorso relativo del padre (solo per risultati di ricerca)
 )
