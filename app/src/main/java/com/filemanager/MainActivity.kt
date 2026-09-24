@@ -863,9 +863,17 @@ class MainActivity : AppCompatActivity() {
                     filtered.map { f ->
                         // Se è una cartella, conta quanti elementi (file + sottocartelle) contiene
                         val childrenCount = if (f.isDirectory) {
-                            try { f.listFiles()?.size ?: 0 } catch (_: Exception) { 0 }
-                        } else 0
-
+    try {
+        val children = f.listFiles()
+        if (children == null) {
+            0
+        } else if (showHidden) {
+            children.size
+        } else {
+            children.count { !it.name.startsWith(".") }
+        }
+    } catch (_: Exception) { 0 }
+} else 0
                         FileItem(
                             file = f,
                             name = f.name,
