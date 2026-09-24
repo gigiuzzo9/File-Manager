@@ -887,7 +887,6 @@ class MainActivity : AppCompatActivity() {
                 if (files == null) null else {
                     val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
                     filtered.map { f ->
-                        // Se è una cartella, conta quanti elementi visibili contiene
                         val childrenCount = if (f.isDirectory) {
                             try {
                                 val children = f.listFiles()
@@ -969,6 +968,13 @@ class MainActivity : AppCompatActivity() {
             if (!showHidden && name.startsWith(".")) continue
 
             if (name.lowercase().contains(query)) {
+                // Calcola percorso relativo rispetto alla root
+                val parentRelPath = try {
+                    dir.absolutePath.removePrefix(rootInternal).trimStart('/')
+                } catch (_: Exception) { "" }
+
+                val displayPath = if (parentRelPath.isEmpty()) "Memoria interna" else parentRelPath
+
                 out.add(
                     FileItem(
                         file = f,
@@ -977,7 +983,8 @@ class MainActivity : AppCompatActivity() {
                         isDirectory = f.isDirectory,
                         size = if (f.isFile) f.length() else 0L,
                         lastModified = f.lastModified(),
-                        childrenCount = 0
+                        childrenCount = 0,
+                        searchParentPath = displayPath
                     )
                 )
             }
@@ -2000,7 +2007,6 @@ class MainActivity : AppCompatActivity() {
             .setItems(options.toTypedArray()) { _, which ->
                 when (which) {
                     0 -> {
-                        // Aggiorna cartella corrente
                         Toast.makeText(this, "Aggiornamento...", Toast.LENGTH_SHORT).show()
                         loadDirectory(currentPath)
                     }
