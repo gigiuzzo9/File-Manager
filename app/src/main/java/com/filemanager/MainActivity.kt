@@ -42,6 +42,7 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.color.MaterialColors
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -70,6 +71,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSelPaste: LinearLayout
     private lateinit var btnSelMore: LinearLayout
     private lateinit var btnPaste: ImageButton
+    private lateinit var btnViewToggle: ImageButton
 
     private val rootInternal: String
         get() = if (File("/storage/emulated/0").exists()) {
@@ -88,7 +90,6 @@ class MainActivity : AppCompatActivity() {
     private var searchQuery: String = ""
     private var activeCategory: String? = null
 
-    // Appunti: lista di path + azione (copy/cut)
     private val clipboardPaths = mutableListOf<String>()
     private var clipboardAction: String? = null
 
@@ -126,6 +127,7 @@ class MainActivity : AppCompatActivity() {
         btnSelPaste = findViewById(R.id.btnSelPaste)
         btnSelMore = findViewById(R.id.btnSelMore)
         btnPaste = findViewById(R.id.btnPaste)
+        btnViewToggle = findViewById(R.id.btnViewToggle)
 
         editSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -139,7 +141,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<ImageButton>(R.id.btnBack).setOnClickListener { goBack() }
         findViewById<ImageButton>(R.id.btnAddFolder).setOnClickListener { createFolder() }
         findViewById<LinearLayout>(R.id.btnSort).setOnClickListener { showSortDialog() }
-        findViewById<ImageButton>(R.id.btnViewToggle).setOnClickListener { toggleView() }
+        btnViewToggle.setOnClickListener { toggleView() }
         findViewById<ImageButton>(R.id.btnSettings).setOnClickListener { showSettingsDialog() }
 
         btnPaste.setOnClickListener { pasteFromClipboard() }
@@ -157,6 +159,7 @@ class MainActivity : AppCompatActivity() {
 
         updateStorageCards()
         updateSortLabel()
+        updateViewToggleIcon()
         updatePasteButton()
 
         if (hasStoragePermission()) {
@@ -178,6 +181,17 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         executor.shutdown()
+    }
+
+    // ---------- ICONA TOGGLE VISTA ----------
+
+    private fun updateViewToggleIcon() {
+        btnViewToggle.setImageResource(if (isGrid) R.drawable.grid else R.drawable.list)
+        val tintColor = MaterialColors.getColor(
+            btnViewToggle,
+            com.google.android.material.R.attr.colorOnSurface
+        )
+        btnViewToggle.setColorFilter(tintColor)
     }
 
     // ---------- PULSANTE INCOLLA IN actionsRow ----------
@@ -262,10 +276,8 @@ class MainActivity : AppCompatActivity() {
                         try {
                             val f = File(path)
 
-                            // Tentativo 1: File diretto
                             var ok = if (f.isDirectory) deleteRecursively(f) else f.delete()
 
-                            // Tentativo 2: fallback SAF
                             if (!ok) {
                                 val doc = getSafDocumentFile(path)
                                 if (doc != null) {
@@ -443,7 +455,6 @@ class MainActivity : AppCompatActivity() {
             var ok = false
             var errorMsg = ""
 
-            // --- Tentativo 1: SAF ---
             try {
                 ok = comprimiZipMultiViaSaf(pathsToZip, finalZipName)
                 if (!ok) errorMsg = "SAF: compressione fallita"
@@ -452,7 +463,6 @@ class MainActivity : AppCompatActivity() {
                 errorMsg = "SAF: ${e.message}"
             }
 
-            // --- Tentativo 2: File diretto ---
             if (!ok) {
                 val zipFile = File(currentPath, finalZipName)
                 var addedCount = 0
@@ -1490,7 +1500,6 @@ class MainActivity : AppCompatActivity() {
         val action = clipboardAction
         val dstDir = File(currentPath)
 
-        // Filtra sorgenti esistenti
         val existingSrc = srcPaths.filter { File(it).exists() }
         if (existingSrc.isEmpty()) {
             AlertDialog.Builder(this)
@@ -1514,7 +1523,6 @@ class MainActivity : AppCompatActivity() {
             for (srcPath in existingSrc) {
                 val src = File(srcPath)
 
-                // Calcola nome destinazione (rinomina se stessa cartella o nome esistente)
                 var dstName = src.name
                 var dst = File(dstDir, dstName)
 
@@ -1525,12 +1533,10 @@ class MainActivity : AppCompatActivity() {
 
                 var ok = false
 
-                // Tentativo 1: SAF
                 try {
                     ok = copyViaSaf(src, dst)
                 } catch (_: Exception) {}
 
-                // Tentativo 2: File diretto
                 if (!ok) {
                     try {
                         if (src.isDirectory) {
@@ -1548,7 +1554,6 @@ class MainActivity : AppCompatActivity() {
                     copied++
                     scanPath(dst.absolutePath)
 
-                    // Se "cut", elimina l'originale (solo se dst != src)
                     if (action == "cut" && dst.absolutePath != src.absolutePath) {
                         try {
                             if (src.isDirectory) src.deleteRecursively() else src.delete()
@@ -1886,6 +1891,7 @@ class MainActivity : AppCompatActivity() {
     private fun toggleView() {
         isGrid = !isGrid
         prefs.edit().putBoolean("is_grid", isGrid).apply()
+        updateViewToggleIcon()
         renderList()
     }
 
