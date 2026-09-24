@@ -48,27 +48,31 @@ class FileAdapter(
                 }
                 else -> {
                     val mime = getMimeType(item.name)
-                    when {
-                        mime.startsWith("image/") -> {
-                            Glide.with(iconView.context)
-                                .load(File(item.path))
-                                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                                .centerCrop()
-                                .placeholder(R.drawable.images)
-                                .error(R.drawable.images)
-                                .into(iconView)
-                        }
-                        mime.startsWith("video/") -> {
-                            Glide.with(iconView.context)
-                                .load(File(item.path))
-                                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                                .centerCrop()
-                                .placeholder(R.drawable.video)
-                                .error(R.drawable.video)
-                                .into(iconView)
-                        }
-                        mime.startsWith("audio/") -> iconView.setImageResource(R.drawable.audio)
-                        else -> iconView.setImageResource(R.drawable.documents)
+                    val ext = item.name.substringAfterLast('.', "").lowercase()
+
+                    // 1) Immagine reale → miniatura con Glide
+                    if (mime.startsWith("image/")) {
+                        Glide.with(iconView.context)
+                            .load(File(item.path))
+                            .diskCacheStrategy(DiskCacheStrategy.ALL)
+                            .centerCrop()
+                            .placeholder(R.drawable.images)
+                            .error(R.drawable.images)
+                            .into(iconView)
+                    }
+                    // 2) Video → frame con Glide
+                    else if (mime.startsWith("video/")) {
+                        Glide.with(iconView.context)
+                            .load(File(item.path))
+                            .diskCacheStrategy(DiskCacheStrategy.ALL)
+                            .centerCrop()
+                            .placeholder(R.drawable.video)
+                            .error(R.drawable.video)
+                            .into(iconView)
+                    }
+                    // 3) Altri file → icona per estensione
+                    else {
+                        iconView.setImageResource(iconForExtension(ext))
                     }
                 }
             }
@@ -93,6 +97,40 @@ class FileAdapter(
     }
 
     override fun getItemCount() = items.size
+
+    /**
+     * Mappa estensione → icona personalizzata.
+     * Per aggiungere nuove estensioni, basta inserirle qui.
+     */
+    private fun iconForExtension(ext: String): Int {
+        return when (ext) {
+            // 1) PDF
+            "pdf" -> R.drawable.pdf
+
+            // 2) Word / Writer / testo
+            "doc", "docx", "odt", "rtf", "txt" -> R.drawable.doc
+
+            // 3) Excel / Calc / CSV
+            "xls", "xlsx", "ods", "csv" -> R.drawable.xls
+
+            // 4) PowerPoint / Impress
+            "ppt", "pptx", "odp" -> R.drawable.ppt
+
+            // 5) APK Android
+            "apk" -> R.drawable.apk
+
+            // 6) Codice / markup / web
+            "xml", "html", "htm", "json", "js", "css",
+            "yaml", "yml", "ini", "log",
+            "py", "java", "kt", "c", "cpp", "h", "sh", "bat" -> R.drawable.code
+
+            // Audio (icona statica)
+            "mp3", "wav", "ogg", "flac", "m4a", "aac" -> R.drawable.audio
+
+            // Default: documenti generici
+            else -> R.drawable.documents
+        }
+    }
 
     private fun getMimeType(name: String): String {
         val l = name.lowercase()
