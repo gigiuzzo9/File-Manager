@@ -336,7 +336,6 @@ class MainActivity : AppCompatActivity() {
         val popup = PopupMenu(this, btnSelMore)
         val count = selectedPaths.size
 
-        // Se è 1 file singolo (non cartella) → aggiungi "Apri" e "Apri con..."
         if (count == 1) {
             val item = getSingleSelectedItem()
             if (item != null && !item.isDirectory) {
@@ -862,13 +861,19 @@ class MainActivity : AppCompatActivity() {
                 if (files == null) null else {
                     val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
                     filtered.map { f ->
+                        // Se è una cartella, conta quanti elementi (file + sottocartelle) contiene
+                        val childrenCount = if (f.isDirectory) {
+                            try { f.listFiles()?.size ?: 0 } catch (_: Exception) { 0 }
+                        } else 0
+
                         FileItem(
                             file = f,
                             name = f.name,
                             path = f.absolutePath,
                             isDirectory = f.isDirectory,
                             size = if (f.isFile) f.length() else 0L,
-                            lastModified = f.lastModified()
+                            lastModified = f.lastModified(),
+                            childrenCount = childrenCount
                         )
                     }
                 }
@@ -936,7 +941,8 @@ class MainActivity : AppCompatActivity() {
                         path = f.absolutePath,
                         isDirectory = f.isDirectory,
                         size = if (f.isFile) f.length() else 0L,
-                        lastModified = f.lastModified()
+                        lastModified = f.lastModified(),
+                        childrenCount = 0
                     )
                 )
             }
@@ -1026,7 +1032,8 @@ class MainActivity : AppCompatActivity() {
                             path = f.absolutePath,
                             isDirectory = false,
                             size = f.length(),
-                            lastModified = f.lastModified()
+                            lastModified = f.lastModified(),
+                            childrenCount = 0
                         )
                     )
                 }
@@ -1071,7 +1078,6 @@ class MainActivity : AppCompatActivity() {
             mimeType.startsWith("video/") -> "video"
             mimeType.startsWith("audio/") -> "audio"
             else -> {
-                // Per documenti, usa l'estensione per non mischiare PDF/XML/DOCX...
                 val ext = fileName.substringAfterLast('.', "").lowercase()
                 if (ext.isNotEmpty()) "ext_$ext" else "document"
             }
@@ -1587,7 +1593,6 @@ class MainActivity : AppCompatActivity() {
                     copied++
                     scanPath(dst.absolutePath)
 
-                    // Se "cut", elimina l'originale (solo se dst != src) con fallback SAF
                     if (action == "cut" && dst.absolutePath != src.absolutePath) {
                         try {
                             var delOk = if (src.isDirectory) src.deleteRecursively() else src.delete()
