@@ -35,7 +35,16 @@ class FileAdapter(
     override fun onBindViewHolder(holder: VH, position: Int) {
         val item = items[position]
         holder.name.text = item.name
-        holder.meta?.text = if (item.isDirectory) "" else formatSize(item.size)
+
+        // Sotto il nome:
+        // - cartella → "N files" (file + sottocartelle al suo interno)
+        // - file → dimensione
+        holder.meta?.text = if (item.isDirectory) {
+            val n = item.childrenCount
+            if (n == 1) "1 file" else "$n files"
+        } else {
+            formatSize(item.size)
+        }
 
         val iconView = holder.icon
         if (iconView != null) {
@@ -50,7 +59,6 @@ class FileAdapter(
                     val mime = getMimeType(item.name)
                     val ext = item.name.substringAfterLast('.', "").lowercase()
 
-                    // 1) Immagine reale → miniatura con Glide
                     if (mime.startsWith("image/")) {
                         Glide.with(iconView.context)
                             .load(File(item.path))
@@ -59,9 +67,7 @@ class FileAdapter(
                             .placeholder(R.drawable.images)
                             .error(R.drawable.images)
                             .into(iconView)
-                    }
-                    // 2) Video → frame con Glide
-                    else if (mime.startsWith("video/")) {
+                    } else if (mime.startsWith("video/")) {
                         Glide.with(iconView.context)
                             .load(File(item.path))
                             .diskCacheStrategy(DiskCacheStrategy.ALL)
@@ -69,16 +75,13 @@ class FileAdapter(
                             .placeholder(R.drawable.video)
                             .error(R.drawable.video)
                             .into(iconView)
-                    }
-                    // 3) Altri file → icona per estensione
-                    else {
+                    } else {
                         iconView.setImageResource(iconForExtension(ext))
                     }
                 }
             }
         }
 
-        // Evidenzia se selezionato
         val isSelected = selectionMode && selectedPaths.contains(item.path)
         if (isSelected) {
             holder.itemView.setBackgroundColor(Color.parseColor("#333B82F6"))
@@ -86,10 +89,8 @@ class FileAdapter(
             holder.itemView.setBackgroundColor(Color.TRANSPARENT)
         }
 
-        // Click normale
         holder.itemView.setOnClickListener { onClick(item) }
 
-        // Long click
         holder.itemView.setOnLongClickListener {
             onLongClick(item)
             true
@@ -98,36 +99,17 @@ class FileAdapter(
 
     override fun getItemCount() = items.size
 
-    /**
-     * Mappa estensione → icona personalizzata.
-     * Per aggiungere nuove estensioni, basta inserirle qui.
-     */
     private fun iconForExtension(ext: String): Int {
         return when (ext) {
-            // 1) PDF
             "pdf" -> R.drawable.pdf
-
-            // 2) Word / Writer / testo
             "doc", "docx", "odt", "rtf", "txt" -> R.drawable.doc
-
-            // 3) Excel / Calc / CSV
             "xls", "xlsx", "ods", "csv" -> R.drawable.xls
-
-            // 4) PowerPoint / Impress
             "ppt", "pptx", "odp" -> R.drawable.ppt
-
-            // 5) APK Android
             "apk" -> R.drawable.apk
-
-            // 6) Codice / markup / web
             "xml", "html", "htm", "json", "js", "css",
             "yaml", "yml", "ini", "log",
             "py", "java", "kt", "c", "cpp", "h", "sh", "bat" -> R.drawable.code
-
-            // Audio (icona statica)
             "mp3", "wav", "ogg", "flac", "m4a", "aac" -> R.drawable.audio
-
-            // Default: documenti generici
             else -> R.drawable.documents
         }
     }
