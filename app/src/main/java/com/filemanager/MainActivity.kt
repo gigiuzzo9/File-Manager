@@ -42,7 +42,6 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.color.MaterialColors
 import java.io.File
 import java.io.FileInputStream
@@ -73,7 +72,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSelMore: LinearLayout
     private lateinit var btnPaste: ImageButton
     private lateinit var btnViewToggle: ImageButton
-    private lateinit var swipeRefresh: SwipeRefreshLayout
 
     private val rootInternal: String
         get() = if (File("/storage/emulated/0").exists()) {
@@ -130,14 +128,6 @@ class MainActivity : AppCompatActivity() {
         btnSelMore = findViewById(R.id.btnSelMore)
         btnPaste = findViewById(R.id.btnPaste)
         btnViewToggle = findViewById(R.id.btnViewToggle)
-        swipeRefresh = findViewById(R.id.swipeRefresh)
-
-        swipeRefresh.setOnRefreshListener {
-            loadDirectory(currentPath)
-            mainHandler.postDelayed({
-                swipeRefresh.isRefreshing = false
-            }, 500)
-        }
 
         editSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -346,15 +336,18 @@ class MainActivity : AppCompatActivity() {
         val popup = PopupMenu(this, btnSelMore)
         val count = selectedPaths.size
 
+        // Controlla se TUTTI gli elementi visibili sono selezionati
         val allVisibleSelected = displayedItems.isNotEmpty() &&
                 displayedItems.all { selectedPaths.contains(it.path) }
 
+        // Voce "Seleziona tutto" / "Deseleziona tutto" (sempre visibile)
         if (allVisibleSelected) {
             popup.menu.add(0, 20, 0, "❌  Deseleziona tutto")
         } else {
             popup.menu.add(0, 20, 0, "✅  Seleziona tutto")
         }
 
+        // Se è 1 file singolo (non cartella) → aggiungi "Apri" e "Apri con..."
         if (count == 1) {
             val item = getSingleSelectedItem()
             if (item != null && !item.isDirectory) {
@@ -1083,7 +1076,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderList() {
-        // Salva posizione di scroll corrente
         val firstVisible = try {
             when (val lm = recycler.layoutManager) {
                 is GridLayoutManager -> lm.findFirstVisibleItemPosition()
@@ -1119,7 +1111,6 @@ class MainActivity : AppCompatActivity() {
             }
         )
 
-        // Ripristina la posizione
         if (firstVisible > 0 && displayedItems.isNotEmpty()) {
             recycler.scrollToPosition(firstVisible)
         }
@@ -1997,19 +1988,24 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSettingsDialog() {
         val options = mutableListOf<String>()
-        options.add(if (showHidden) "Nascondi file nascosti" else "Mostra file nascosti")
-        options.add("Rinnova permesso scrittura")
+        options.add("🔄  Aggiorna cartella")
+        options.add(if (showHidden) "🙈  Nascondi file nascosti" else "👁  Mostra file nascosti")
+        options.add("🔑  Rinnova permesso scrittura")
 
         AlertDialog.Builder(this)
             .setTitle("Impostazioni")
             .setItems(options.toTypedArray()) { _, which ->
                 when (which) {
                     0 -> {
+                        Toast.makeText(this, "Aggiornamento...", Toast.LENGTH_SHORT).show()
+                        loadDirectory(currentPath)
+                    }
+                    1 -> {
                         showHidden = !showHidden
                         prefs.edit().putBoolean("show_hidden", showHidden).apply()
                         loadDirectory(currentPath)
                     }
-                    1 -> {
+                    2 -> {
                         safTreeUri = null
                         prefs.edit().remove("saf_tree_uri").apply()
                         requestSaf {
