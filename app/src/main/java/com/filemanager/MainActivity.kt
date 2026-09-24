@@ -1094,7 +1094,7 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) { 0 }
 
         recycler.layoutManager = if (isGrid)
-            GridLayoutManager(this, 3)
+            GridLayoutManager(this, 4)
         else
             LinearLayoutManager(this)
 
