@@ -887,6 +887,7 @@ class MainActivity : AppCompatActivity() {
                 if (files == null) null else {
                     val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
                     filtered.map { f ->
+                        // Se è una cartella, conta quanti elementi visibili contiene
                         val childrenCount = if (f.isDirectory) {
                             try {
                                 val children = f.listFiles()
@@ -1076,6 +1077,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderList() {
+        // Salva la posizione di scroll corrente prima di ricreare la lista
         val firstVisible = try {
             when (val lm = recycler.layoutManager) {
                 is GridLayoutManager -> lm.findFirstVisibleItemPosition()
@@ -1111,6 +1113,7 @@ class MainActivity : AppCompatActivity() {
             }
         )
 
+        // Ripristina la posizione di scroll
         if (firstVisible > 0 && displayedItems.isNotEmpty()) {
             recycler.scrollToPosition(firstVisible)
         }
@@ -1997,6 +2000,7 @@ class MainActivity : AppCompatActivity() {
             .setItems(options.toTypedArray()) { _, which ->
                 when (which) {
                     0 -> {
+                        // Aggiorna cartella corrente
                         Toast.makeText(this, "Aggiornamento...", Toast.LENGTH_SHORT).show()
                         loadDirectory(currentPath)
                     }
