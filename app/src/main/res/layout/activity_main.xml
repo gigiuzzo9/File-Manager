@@ -343,7 +343,6 @@
             android:padding="8dp"
             android:contentDescription="Nuova cartella" />
 
-        <!-- INCOLLA (in actionsRow, appare solo quando serve) -->
         <ImageButton
             android:id="@+id/btnPaste"
             android:layout_width="44dp"
@@ -424,13 +423,20 @@
             android:ellipsize="start" />
     </LinearLayout>
 
-    <!-- LISTA -->
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/recyclerFiles"
+    <!-- LISTA (con Pull to refresh) -->
+    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+        android:id="@+id/swipeRefresh"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1"
-        android:padding="4dp"
-        android:clipToPadding="false" />
+        android:layout_weight="1">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/recyclerFiles"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:padding="4dp"
+            android:clipToPadding="false" />
+
+    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
 </LinearLayout>
