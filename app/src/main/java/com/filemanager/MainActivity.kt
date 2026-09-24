@@ -42,6 +42,7 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.color.MaterialColors
 import java.io.File
 import java.io.FileInputStream
@@ -72,6 +73,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSelMore: LinearLayout
     private lateinit var btnPaste: ImageButton
     private lateinit var btnViewToggle: ImageButton
+    private lateinit var swipeRefresh: SwipeRefreshLayout
 
     private val rootInternal: String
         get() = if (File("/storage/emulated/0").exists()) {
@@ -128,6 +130,14 @@ class MainActivity : AppCompatActivity() {
         btnSelMore = findViewById(R.id.btnSelMore)
         btnPaste = findViewById(R.id.btnPaste)
         btnViewToggle = findViewById(R.id.btnViewToggle)
+        swipeRefresh = findViewById(R.id.swipeRefresh)
+
+        swipeRefresh.setOnRefreshListener {
+            loadDirectory(currentPath)
+            mainHandler.postDelayed({
+                swipeRefresh.isRefreshing = false
+            }, 500)
+        }
 
         editSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -331,109 +341,103 @@ class MainActivity : AppCompatActivity() {
     // ---------- MENU ⋮ DELLA SELEZIONE ----------
 
     private fun showSelectionMoreMenu() {
-    if (selectedPaths.isEmpty()) return
+        if (selectedPaths.isEmpty()) return
 
-    val popup = PopupMenu(this, btnSelMore)
-    val count = selectedPaths.size
+        val popup = PopupMenu(this, btnSelMore)
+        val count = selectedPaths.size
 
-    // Controlla se TUTTI gli elementi visibili sono selezionati
-    val allVisibleSelected = displayedItems.isNotEmpty() &&
-            displayedItems.all { selectedPaths.contains(it.path) }
+        val allVisibleSelected = displayedItems.isNotEmpty() &&
+                displayedItems.all { selectedPaths.contains(it.path) }
 
-    // Voce "Seleziona tutto" / "Deseleziona tutto" (sempre visibile)
-    if (allVisibleSelected) {
-        popup.menu.add(0, 20, 0, "❌  Deseleziona tutto")
-    } else {
-        popup.menu.add(0, 20, 0, "✅  Seleziona tutto")
-    }
-
-    // Se è 1 file singolo (non cartella) → aggiungi "Apri" e "Apri con..."
-    if (count == 1) {
-        val item = getSingleSelectedItem()
-        if (item != null && !item.isDirectory) {
-            popup.menu.add(0, 10, 1, "📂  Apri")
-            popup.menu.add(0, 11, 2, "🔧  Apri con...")
+        if (allVisibleSelected) {
+            popup.menu.add(0, 20, 0, "❌  Deseleziona tutto")
+        } else {
+            popup.menu.add(0, 20, 0, "✅  Seleziona tutto")
         }
-    }
 
-    popup.menu.add(0, 1, 3, "✂️  Taglia")
-    popup.menu.add(0, 2, 4, "📤  Condividi")
-    popup.menu.add(0, 3, 5, "📦  Comprimi in ZIP")
-
-    if (count == 1) {
-        val path = selectedPaths.first()
-        val item = allItems.find { it.path == path }
-        if (item != null) {
-            popup.menu.add(0, 4, 6, "✏️  Rinomina")
-            if (!item.isDirectory && item.name.lowercase().endsWith(".zip")) {
-                popup.menu.add(0, 5, 7, "📂  Decomprimi")
+        if (count == 1) {
+            val item = getSingleSelectedItem()
+            if (item != null && !item.isDirectory) {
+                popup.menu.add(0, 10, 1, "📂  Apri")
+                popup.menu.add(0, 11, 2, "🔧  Apri con...")
             }
-            popup.menu.add(0, 6, 8, "ℹ️  Proprietà")
         }
-    }
 
-    popup.setOnMenuItemClickListener { menuItem ->
-        when (menuItem.itemId) {
-            20 -> {
-                // Seleziona tutto / Deseleziona tutto
-                if (allVisibleSelected) {
-                    // Deseleziona tutto
-                    selectedPaths.clear()
-                    updateSelectionUI()
-                    renderList()
-                } else {
-                    // Seleziona tutto
-                    selectedPaths.clear()
-                    for (item in displayedItems) {
-                        selectedPaths.add(item.path)
+        popup.menu.add(0, 1, 3, "✂️  Taglia")
+        popup.menu.add(0, 2, 4, "📤  Condividi")
+        popup.menu.add(0, 3, 5, "📦  Comprimi in ZIP")
+
+        if (count == 1) {
+            val path = selectedPaths.first()
+            val item = allItems.find { it.path == path }
+            if (item != null) {
+                popup.menu.add(0, 4, 6, "✏️  Rinomina")
+                if (!item.isDirectory && item.name.lowercase().endsWith(".zip")) {
+                    popup.menu.add(0, 5, 7, "📂  Decomprimi")
+                }
+                popup.menu.add(0, 6, 8, "ℹ️  Proprietà")
+            }
+        }
+
+        popup.setOnMenuItemClickListener { menuItem ->
+            when (menuItem.itemId) {
+                20 -> {
+                    if (allVisibleSelected) {
+                        selectedPaths.clear()
+                        updateSelectionUI()
+                        renderList()
+                    } else {
+                        selectedPaths.clear()
+                        for (item in displayedItems) {
+                            selectedPaths.add(item.path)
+                        }
+                        updateSelectionUI()
+                        renderList()
                     }
-                    updateSelectionUI()
-                    renderList()
+                }
+                10 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) {
+                        exitSelectionMode()
+                        openFileWithDefault(item)
+                    }
+                }
+                11 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) {
+                        exitSelectionMode()
+                        openFileWithPicker(item)
+                    }
+                }
+                1 -> copySelectedFiles("cut")
+                2 -> shareSelectedFiles()
+                3 -> comprimiZipSelezioneMultipla()
+                4 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) {
+                        exitSelectionMode()
+                        renameItem(item)
+                    }
+                }
+                5 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) {
+                        exitSelectionMode()
+                        decomprimiZip(item)
+                    }
+                }
+                6 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) {
+                        exitSelectionMode()
+                        showItemInfo(item)
+                    }
                 }
             }
-            10 -> {
-                val item = getSingleSelectedItem()
-                if (item != null) {
-                    exitSelectionMode()
-                    openFileWithDefault(item)
-                }
-            }
-            11 -> {
-                val item = getSingleSelectedItem()
-                if (item != null) {
-                    exitSelectionMode()
-                    openFileWithPicker(item)
-                }
-            }
-            1 -> copySelectedFiles("cut")
-            2 -> shareSelectedFiles()
-            3 -> comprimiZipSelezioneMultipla()
-            4 -> {
-                val item = getSingleSelectedItem()
-                if (item != null) {
-                    exitSelectionMode()
-                    renameItem(item)
-                }
-            }
-            5 -> {
-                val item = getSingleSelectedItem()
-                if (item != null) {
-                    exitSelectionMode()
-                    decomprimiZip(item)
-                }
-            }
-            6 -> {
-                val item = getSingleSelectedItem()
-                if (item != null) {
-                    exitSelectionMode()
-                    showItemInfo(item)
-                }
-            }
+            true
         }
-        true
+        popup.show()
     }
-    popup.show()
-}
 
     private fun getSingleSelectedItem(): FileItem? {
         if (selectedPaths.size != 1) return null
@@ -890,19 +894,19 @@ class MainActivity : AppCompatActivity() {
                 if (files == null) null else {
                     val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
                     filtered.map { f ->
-                        // Se è una cartella, conta quanti elementi (file + sottocartelle) contiene
                         val childrenCount = if (f.isDirectory) {
-    try {
-        val children = f.listFiles()
-        if (children == null) {
-            0
-        } else if (showHidden) {
-            children.size
-        } else {
-            children.count { !it.name.startsWith(".") }
-        }
-    } catch (_: Exception) { 0 }
-} else 0
+                            try {
+                                val children = f.listFiles()
+                                if (children == null) {
+                                    0
+                                } else if (showHidden) {
+                                    children.size
+                                } else {
+                                    children.count { !it.name.startsWith(".") }
+                                }
+                            } catch (_: Exception) { 0 }
+                        } else 0
+
                         FileItem(
                             file = f,
                             name = f.name,
@@ -1079,6 +1083,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderList() {
+        // Salva posizione di scroll corrente
+        val firstVisible = try {
+            when (val lm = recycler.layoutManager) {
+                is GridLayoutManager -> lm.findFirstVisibleItemPosition()
+                is LinearLayoutManager -> lm.findFirstVisibleItemPosition()
+                else -> 0
+            }
+        } catch (_: Exception) { 0 }
+
         recycler.layoutManager = if (isGrid)
             GridLayoutManager(this, 3)
         else
@@ -1105,6 +1118,11 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         )
+
+        // Ripristina la posizione
+        if (firstVisible > 0 && displayedItems.isNotEmpty()) {
+            recycler.scrollToPosition(firstVisible)
+        }
     }
 
     // ---------- APERTURA FILE ----------
