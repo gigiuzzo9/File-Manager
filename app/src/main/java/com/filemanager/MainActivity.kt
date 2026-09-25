@@ -336,18 +336,15 @@ class MainActivity : AppCompatActivity() {
         val popup = PopupMenu(this, btnSelMore)
         val count = selectedPaths.size
 
-        // Controlla se TUTTI gli elementi visibili sono selezionati
         val allVisibleSelected = displayedItems.isNotEmpty() &&
                 displayedItems.all { selectedPaths.contains(it.path) }
 
-        // Voce "Seleziona tutto" / "Deseleziona tutto" (sempre visibile)
         if (allVisibleSelected) {
             popup.menu.add(0, 20, 0, "❌  Deseleziona tutto")
         } else {
             popup.menu.add(0, 20, 0, "✅  Seleziona tutto")
         }
 
-        // Se è 1 file singolo (non cartella) → aggiungi "Apri" e "Apri con..."
         if (count == 1) {
             val item = getSingleSelectedItem()
             if (item != null && !item.isDirectory) {
@@ -968,7 +965,6 @@ class MainActivity : AppCompatActivity() {
             if (!showHidden && name.startsWith(".")) continue
 
             if (name.lowercase().contains(query)) {
-                // Calcola percorso relativo rispetto alla root
                 val parentRelPath = try {
                     dir.absolutePath.removePrefix(rootInternal).trimStart('/')
                 } catch (_: Exception) { "" }
@@ -1084,7 +1080,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderList() {
-        // Salva la posizione di scroll corrente prima di ricreare la lista
         val firstVisible = try {
             when (val lm = recycler.layoutManager) {
                 is GridLayoutManager -> lm.findFirstVisibleItemPosition()
@@ -1120,7 +1115,6 @@ class MainActivity : AppCompatActivity() {
             }
         )
 
-        // Ripristina la posizione di scroll
         if (firstVisible > 0 && displayedItems.isNotEmpty()) {
             recycler.scrollToPosition(firstVisible)
         }
@@ -1141,6 +1135,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openFileWithDefault(item: FileItem) {
+        // APK → gestione speciale per l'installazione
+        if (item.name.lowercase().endsWith(".apk")) {
+            installApk(item)
+            return
+        }
+
         val mimeType = getMimeType(item.name)
         val categoryKey = getCategoryKey(mimeType, item.name)
 
@@ -1152,6 +1152,51 @@ class MainActivity : AppCompatActivity() {
         }
 
         showCustomAppPicker(item, mimeType, categoryKey)
+    }
+
+    private fun installApk(item: FileItem) {
+        try {
+            // Verifica se abbiamo il permesso di installare pacchetti
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (!packageManager.canRequestPackageInstalls()) {
+                    AlertDialog.Builder(this)
+                        .setTitle("Permesso richiesto")
+                        .setMessage("Per installare APK, devi autorizzare il File Manager.\n\nApro le impostazioni?")
+                        .setPositiveButton("Apri impostazioni") { _, _ ->
+                            val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                                .setData(Uri.parse("package:$packageName"))
+                            startActivity(intent)
+                        }
+                        .setNegativeButton("Annulla", null)
+                        .show()
+                    return
+                }
+            }
+
+            // Abbiamo il permesso → lancia l'installazione
+            val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                clipData = ClipData.newRawUri("", uri)
+            }
+
+            val resInfoList = packageManager.queryIntentActivities(
+                intent, PackageManager.MATCH_DEFAULT_ONLY
+            )
+            for (resolveInfo in resInfoList) {
+                grantUriPermission(
+                    resolveInfo.activityInfo.packageName,
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+
+            startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Errore installazione: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun tryOpenWithPackage(item: FileItem, pkgName: String, mimeType: String): Boolean {
@@ -1187,7 +1232,8 @@ class MainActivity : AppCompatActivity() {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
 
-            val apps = packageManager.queryIntentActivities(probeIntent, PackageManager.MATCH_DEFAULT_ONLY)
+            // 0 = nessun filtro → mostra TUTTE le app che gestiscono il file
+            val apps = packageManager.queryIntentActivities(probeIntent, 0)
             val filtered = apps.filter { it.activityInfo.packageName != packageName }
 
             if (filtered.isEmpty()) {
