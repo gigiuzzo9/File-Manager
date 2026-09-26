@@ -888,13 +888,13 @@ class MainActivity : AppCompatActivity() {
                     filtered.map { f ->
                         val childrenCount = if (f.isDirectory) {
                             try {
-                                val children = f.listFiles()
+                                val children = f.list()
                                 if (children == null) {
                                     0
                                 } else if (showHidden) {
                                     children.size
                                 } else {
-                                    children.count { !it.name.startsWith(".") }
+                                    children.count { !it.startsWith(".") }
                                 }
                             } catch (_: Exception) { 0 }
                         } else 0
@@ -1895,13 +1895,17 @@ class MainActivity : AppCompatActivity() {
     private fun deleteRecursively(file: File): Boolean {
         if (file.isDirectory) {
             val children = file.listFiles() ?: return file.delete()
+            var allDeleted = true
             for (child in children) {
-                deleteRecursively(child)
+                if (!deleteRecursively(child)) allDeleted = false
             }
+            val deletedDir = file.delete()
+            return allDeleted && deletedDir
         }
-        val deleted = file.delete()
-        if (deleted) deleteFromMediaStore(file.absolutePath)
-        return deleted
+        // Eliminazione diretta dal filesystem: non interroghiamo MediaStore
+        // per ogni singolo file, perché con centinaia/migliaia di elementi
+        // trasformava la cancellazione in un'operazione molto lenta.
+        return file.delete()
     }
 
     // ---------- MEDIASTORE ----------
