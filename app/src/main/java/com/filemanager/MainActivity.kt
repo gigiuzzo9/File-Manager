@@ -78,9 +78,6 @@ class MainActivity : AppCompatActivity() {
     private var fileAdapter: FileAdapter? = null
     private var currentLayoutIsGrid: Boolean? = null
 
-    // Buffer ottimale per FUSE Android
-    private val ioBufferSize = 128 * 1024
-
     private val rootInternal: String
         get() = if (File("/storage/emulated/0").exists()) {
             "/storage/emulated/0"
@@ -266,52 +263,63 @@ class MainActivity : AppCompatActivity() {
     private fun deleteSelectedFiles() {
         if (selectedPaths.isEmpty()) return
 
-        val pathsToDelete = selectedPaths.toList()
+        val count = selectedPaths.size
         val pathAtStart = currentPath
 
         AlertDialog.Builder(this)
             .setTitle("Elimina")
-            .setMessage("Eliminare ${pathsToDelete.size} file?")
+            .setMessage("Eliminare $count file?")
             .setPositiveButton("Elimina") { _, _ ->
+                val pathsToDelete = selectedPaths.toList()
                 Toast.makeText(this, "Eliminazione in corso...", Toast.LENGTH_SHORT).show()
 
                 executor.execute {
+                    val operationStart = System.nanoTime()
+                    var directDeleteNanos = 0L
+                    var safDeleteNanos = 0L
                     var deleted = 0
-                    var failed = 0
-
                     for (path in pathsToDelete) {
-                        val f = File(path)
-                        var ok = false
-
-                        // 1) File diretto (veloce)
                         try {
-                            ok = if (f.isDirectory) deleteRecursively(f) else f.delete()
-                        } catch (_: Exception) { ok = false }
+                            val f = File(path)
 
-                        // 2) SAF solo come fallback
-                        if (!ok) {
-                            try {
+                            // PRIMA: File diretto
+                            val directStart = System.nanoTime()
+                            var ok = if (f.isDirectory) deleteRecursively(f) else f.delete()
+                            directDeleteNanos += System.nanoTime() - directStart
+
+                            // SAF SOLO come fallback
+                            if (!ok) {
+                                val safStart = System.nanoTime()
                                 val doc = getSafDocumentFile(path)
                                 if (doc != null) {
-                                    ok = if (doc.isDirectory) deleteDocumentRecursive(doc) else doc.delete()
+                                    ok = try {
+                                        if (doc.isDirectory) deleteDocumentRecursive(doc) else doc.delete()
+                                    } catch (_: Exception) { false }
                                 }
-                            } catch (_: Exception) { ok = false }
-                        }
+                                safDeleteNanos += System.nanoTime() - safStart
+                            }
 
-                        if (ok) deleted++ else failed++
+                            if (ok) deleted++
+                        } catch (_: Exception) {}
                     }
 
                     val finalDeleted = deleted
-                    val finalFailed = failed
+                    val operationNanos = System.nanoTime() - operationStart
                     mainHandler.post {
-                        Toast.makeText(
-                            this,
-                            if (finalFailed == 0) "Eliminati $finalDeleted file"
-                            else "Eliminati $finalDeleted file, $finalFailed non riusciti",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        Toast.makeText(this, "Eliminati $finalDeleted file", Toast.LENGTH_SHORT).show()
                         exitSelectionMode()
-                        loadDirectory(pathAtStart)
+                        loadDirectory(pathAtStart) { refreshNanos ->
+                            showDiagnostic(
+                                "Diagnostica cancellazione",
+                                listOf(
+                                    "File.delete()/ricorsivo: ${formatDiagnosticMs(directDeleteNanos)}",
+                                    "Fallback SAF: ${formatDiagnosticMs(safDeleteNanos)}",
+                                    "Refresh elenco: ${formatDiagnosticMs(refreshNanos)}",
+                                    "Operazione filesystem: ${formatDiagnosticMs(operationNanos)}",
+                                    "TOTALE fino a elenco aggiornato: ${formatDiagnosticMs(operationNanos + refreshNanos)}"
+                                )
+                            )
+                        }
                     }
                 }
             }
@@ -369,6 +377,20 @@ class MainActivity : AppCompatActivity() {
         val action = clipboardAction
         val dstDir = File(currentPath)
 
+        val existingSrc = srcPaths.filter { File(it).exists() }
+        if (existingSrc.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("Errore Incolla")
+                .setMessage("Nessun file originale trovato")
+                .setPositiveButton("OK", null)
+                .show()
+            clipboardPaths.clear()
+            clipboardAction = null
+            exitSelectionMode()
+            updatePasteButton()
+            return
+        }
+
         Toast.makeText(
             this,
             if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
@@ -376,66 +398,77 @@ class MainActivity : AppCompatActivity() {
         ).show()
 
         executor.execute {
+            val operationStart = System.nanoTime()
+            var renameNanos = 0L
+            var directCopyNanos = 0L
+            var safCopyNanos = 0L
+            var cutDeleteNanos = 0L
             var copied = 0
             var failed = 0
+            var errorMsg = ""
             val copiedPaths = ArrayList<String>()
 
-            for (srcPath in srcPaths) {
+            for (srcPath in existingSrc) {
                 val src = File(srcPath)
-                if (!src.exists()) {
-                    failed++
-                    continue
-                }
 
-                var dst = File(dstDir, src.name)
+                var dstName = src.name
+                var dst = File(dstDir, dstName)
+
                 if (dst.absolutePath == src.absolutePath || dst.exists()) {
-                    dst = File(dstDir, generateUniqueName(dstDir, src.name))
+                    dstName = generateUniqueName(dstDir, src.name)
+                    dst = File(dstDir, dstName)
                 }
 
                 var ok = false
                 var renamed = false
 
-                // === SPOSTAMENTO (cut) — renameTo() diretto, istantaneo ===
+                // === 1) CUT: renameTo() diretto ===
                 if (action == "cut") {
+                    val renameStart = System.nanoTime()
                     try {
                         renamed = src.renameTo(dst)
                         ok = renamed
                     } catch (_: Exception) {}
+                    renameNanos += System.nanoTime() - renameStart
                 }
 
-                // === COPIA (o fallback del cut) — File diretto ===
+                // === 2) COPIA diretta (o fallback del cut) ===
                 if (!ok) {
+                    val directStart = System.nanoTime()
                     try {
                         if (src.isDirectory) {
                             copyDirectoryRecursive(src, dst)
                         } else {
                             copyFile(src, dst)
                         }
-                        // Verifica REALE che il file esista a destinazione
                         ok = dst.exists()
                     } catch (_: Exception) {
                         ok = false
                         try { if (dst.exists()) dst.deleteRecursively() } catch (_: Exception) {}
                     }
+                    directCopyNanos += System.nanoTime() - directStart
                 }
 
-                // === SAF SOLO SE FILE FALLISCE ===
+                // === 3) SAF solo se File fallisce ===
                 if (!ok) {
+                    val safStart = System.nanoTime()
                     try {
                         ok = copyViaSaf(src, dst)
                     } catch (_: Exception) { ok = false }
+                    safCopyNanos += System.nanoTime() - safStart
                 }
 
                 if (!ok) {
                     failed++
+                    errorMsg += "\n${src.name}: operazione non riuscita"
                     continue
                 }
 
                 copied++
                 copiedPaths.add(dst.absolutePath)
 
-                // Se "cut" e rename non è riuscito, elimina l'originale
                 if (action == "cut" && !renamed && dst.absolutePath != src.absolutePath) {
+                    val deleteStart = System.nanoTime()
                     try {
                         var delOk = if (src.isDirectory) deleteRecursively(src) else src.delete()
                         if (!delOk) {
@@ -445,17 +478,20 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
                     } catch (_: Exception) {}
+                    cutDeleteNanos += System.nanoTime() - deleteStart
                 }
             }
 
-            // Una sola scansione MediaStore per tutti i file copiati
-            if (copiedPaths.isNotEmpty()) {
-                scanPaths(copiedPaths)
-            }
+            // UNA SOLA scansione MediaStore per tutti i file copiati
+            val scanStart = System.nanoTime()
+            scanPaths(copiedPaths)
+            val scanNanos = System.nanoTime() - scanStart
 
             val finalCopied = copied
             val finalFailed = failed
+            val finalErr = errorMsg
             val wasCut = action == "cut"
+            val operationNanos = System.nanoTime() - operationStart
 
             mainHandler.post {
                 if (finalCopied > 0) {
@@ -469,11 +505,25 @@ class MainActivity : AppCompatActivity() {
                     clipboardAction = null
                     exitSelectionMode()
                     updatePasteButton()
-                    loadDirectory(currentPath)
+                    loadDirectory(currentPath) { refreshNanos ->
+                        showDiagnostic(
+                            "Diagnostica incolla",
+                            listOf(
+                                "renameTo() (cut): ${formatDiagnosticMs(renameNanos)}",
+                                "Copia diretta (File): ${formatDiagnosticMs(directCopyNanos)}",
+                                "Copia via SAF (fallback): ${formatDiagnosticMs(safCopyNanos)}",
+                                "Cancellazione sorgente (cut): ${formatDiagnosticMs(cutDeleteNanos)}",
+                                "Scansione MediaStore finale: ${formatDiagnosticMs(scanNanos)}",
+                                "Operazione filesystem: ${formatDiagnosticMs(operationNanos)}",
+                                "Refresh elenco: ${formatDiagnosticMs(refreshNanos)}",
+                                "TOTALE fino a elenco aggiornato: ${formatDiagnosticMs(operationNanos + refreshNanos)}"
+                            )
+                        )
+                    }
                 } else {
                     AlertDialog.Builder(this)
                         .setTitle("Errore Incolla")
-                        .setMessage("Nessun file copiato")
+                        .setMessage("Nessun file copiato.\n$finalErr")
                         .setPositiveButton("OK", null)
                         .show()
                 }
@@ -508,7 +558,7 @@ class MainActivity : AppCompatActivity() {
         dst.parentFile?.mkdirs()
         FileInputStream(src).use { input ->
             FileOutputStream(dst).use { output ->
-                val buffer = ByteArray(ioBufferSize)
+                val buffer = ByteArray(128 * 1024)
                 var length: Int
                 while (input.read(buffer).also { length = it } > 0) {
                     output.write(buffer, 0, length)
@@ -534,7 +584,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- SAF FALLBACK (solo se File fallisce) ----------
+    // ---------- SAF FALLBACK ----------
 
     private fun copyViaSaf(src: File, dst: File): Boolean {
         return try {
@@ -550,7 +600,7 @@ class MainActivity : AppCompatActivity() {
                 val newFile = parentDoc.createFile(mimeType, dst.name) ?: return false
                 contentResolver.openOutputStream(newFile.uri)?.use { output ->
                     FileInputStream(src).use { input ->
-                        val buffer = ByteArray(ioBufferSize)
+                        val buffer = ByteArray(128 * 1024)
                         var length: Int
                         while (input.read(buffer).also { length = it } > 0) {
                             output.write(buffer, 0, length)
@@ -579,7 +629,7 @@ class MainActivity : AppCompatActivity() {
                 try {
                     contentResolver.openOutputStream(newFile.uri)?.use { output ->
                         FileInputStream(f).use { input ->
-                            val buffer = ByteArray(ioBufferSize)
+                            val buffer = ByteArray(128 * 1024)
                             var length: Int
                             while (input.read(buffer).also { length = it } > 0) {
                                 output.write(buffer, 0, length)
@@ -636,9 +686,8 @@ class MainActivity : AppCompatActivity() {
         popup.setOnMenuItemClickListener { menuItem ->
             when (menuItem.itemId) {
                 20 -> {
-                    if (allVisibleSelected) {
-                        selectedPaths.clear()
-                    } else {
+                    if (allVisibleSelected) selectedPaths.clear()
+                    else {
                         selectedPaths.clear()
                         for (item in displayedItems) selectedPaths.add(item.path)
                     }
@@ -782,7 +831,7 @@ class MainActivity : AppCompatActivity() {
         FileInputStream(file).use { fis ->
             val entry = ZipEntry(entryName)
             zos.putNextEntry(entry)
-            val buffer = ByteArray(ioBufferSize)
+            val buffer = ByteArray(128 * 1024)
             var length: Int
             while (fis.read(buffer).also { length = it } > 0) {
                 zos.write(buffer, 0, length)
@@ -826,7 +875,7 @@ class MainActivity : AppCompatActivity() {
                             outFile.parentFile?.mkdirs()
                             try {
                                 FileOutputStream(outFile).use { fos ->
-                                    val buffer = ByteArray(ioBufferSize)
+                                    val buffer = ByteArray(128 * 1024)
                                     var length: Int
                                     while (zis.read(buffer).also { length = it } > 0) {
                                         fos.write(buffer, 0, length)
@@ -1066,17 +1115,40 @@ class MainActivity : AppCompatActivity() {
         return doc
     }
 
+    // ---------- DIAGNOSTICA ----------
+
+    private fun formatDiagnosticMs(nanos: Long): String {
+        return String.format(java.util.Locale.US, "%.2f s", nanos / 1_000_000_000.0)
+    }
+
+    private fun showDiagnostic(title: String, lines: List<String>) {
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(lines.joinToString("\n"))
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
     // ---------- LOAD DIRECTORY ----------
 
-    private fun loadDirectory(path: String, resetCategory: Boolean = false) {
+    private fun loadDirectory(
+        path: String,
+        resetCategory: Boolean = false,
+        onComplete: ((Long) -> Unit)? = null
+    ) {
         currentPath = path
         txtPath.text = path
-        if (resetCategory) { activeCategory = null; searchQuery = "" }
+        if (resetCategory) {
+            activeCategory = null
+            searchQuery = ""
+        }
 
+        val refreshStart = System.nanoTime()
         executor.execute {
             val dir = File(path)
-            val result: List<FileItem>? = if (!dir.exists() || !dir.isDirectory) null
-            else {
+            val result: List<FileItem>? = if (!dir.exists() || !dir.isDirectory) {
+                null
+            } else {
                 val files = dir.listFiles()
                 if (files == null) null
                 else {
@@ -1104,11 +1176,13 @@ class MainActivity : AppCompatActivity() {
 
             mainHandler.post {
                 if (result == null) {
-                    Toast.makeText(this, "Cartella non accessibile", Toast.LENGTH_SHORT).show(); return@post
+                    Toast.makeText(this, "Cartella non accessibile", Toast.LENGTH_SHORT).show()
+                    return@post
                 }
                 allItems = result
                 applyFilters()
                 updatePasteButton()
+                onComplete?.invoke(System.nanoTime() - refreshStart)
             }
         }
     }
