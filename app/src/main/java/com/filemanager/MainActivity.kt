@@ -201,36 +201,6 @@ class MainActivity : AppCompatActivity() {
         btnPaste.visibility = if (shouldShow) View.VISIBLE else View.GONE
     }
 
-    // ============================================================
-    // === HELPER: SAF NECESSARIO? (come Fossify) ================
-    // === SAF solo per SD esterna, OTG, /Android/data/, /Android/obb/
-    // === Tutto il resto su /storage/emulated/0 → File diretto ===
-    // ============================================================
-    private fun needsSaf(path: String): Boolean {
-        val root = rootInternal
-
-        // Fuori dalla memoria interna principale → SAF
-        if (!path.startsWith(root)) return true
-
-        // Percorso relativo
-        val rel = path.removePrefix(root).trimStart('/')
-
-        // /Android/data/ o /Android/obb/ → SAF
-        if (rel.startsWith("Android/data/") || rel.startsWith("Android/obb/")) return true
-
-        // /storage/XXXX-XXXX/ (SD esterna) → SAF
-        if (path.startsWith("/storage/") && !path.startsWith(root + "/") && path != root) return true
-
-        // /mnt/media_rw/ (OTG) → SAF
-        if (path.startsWith("/mnt/media_rw/")) return true
-
-        return false
-    }
-
-    // ============================================================
-    // === SELEZIONE MULTIPLA ====================================
-    // ============================================================
-
     private fun enterSelectionMode(item: FileItem) {
         selectionMode = true
         selectedPaths.clear()
@@ -284,7 +254,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // === ELIMINA — SAF solo se il percorso lo richiede ===
+    // === ELIMINA — File diretto, SAF solo se File fallisce ===
     // ============================================================
     private fun deleteSelectedFiles() {
         if (selectedPaths.isEmpty()) return
@@ -308,13 +278,13 @@ class MainActivity : AppCompatActivity() {
                         try {
                             val f = File(path)
 
-                            // === 1) FILE DIRETTO PRIMA ===
+                            // 1) File diretto
                             val directStart = System.nanoTime()
                             var ok = if (f.isDirectory) deleteRecursively(f) else f.delete()
                             directDeleteNanos += System.nanoTime() - directStart
 
-                            // === 2) SAF solo se necessario E se File fallisce ===
-                            if (!ok && needsSaf(path)) {
+                            // 2) SAF solo se File fallisce
+                            if (!ok) {
                                 val safStart = System.nanoTime()
                                 val doc = getSafDocumentFile(path)
                                 if (doc != null) {
@@ -392,7 +362,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // === COPIA/INCOLLA — SAF solo per percorsi che lo richiedono ===
+    // === COPIA/INCOLLA — File prima, SAF solo come fallback ===
     // ============================================================
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
@@ -417,8 +387,6 @@ class MainActivity : AppCompatActivity() {
             updatePasteButton()
             return
         }
-
-        val destNeedsSaf = needsSaf(currentPath)
 
         Toast.makeText(
             this,
@@ -449,19 +417,16 @@ class MainActivity : AppCompatActivity() {
                 var ok = false
                 var renamed = false
 
-                // === 1) FILE DIRETTO PRIMA (sempre) ===
+                // 1) File diretto
                 val directStart = System.nanoTime()
                 try {
-                    if (action == "cut" && !destNeedsSaf) {
+                    if (action == "cut") {
                         renamed = src.renameTo(dst)
                         ok = renamed
                     }
                     if (!ok) {
-                        if (src.isDirectory) {
-                            copyDirectoryRecursive(src, dst)
-                        } else {
-                            copyFile(src, dst)
-                        }
+                        if (src.isDirectory) copyDirectoryRecursive(src, dst)
+                        else copyFile(src, dst)
                         ok = true
                     }
                 } catch (e: Exception) {
@@ -470,12 +435,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 directCopyNanos += System.nanoTime() - directStart
 
-                // === 2) SAF SOLO SE il percorso lo richiede E File ha fallito ===
-                if (!ok && destNeedsSaf) {
+                // 2) SAF solo se File fallisce
+                if (!ok) {
                     val safStart = System.nanoTime()
-                    try {
-                        ok = copyViaSaf(src, dst)
-                    } catch (_: Exception) { ok = false }
+                    try { ok = copyViaSaf(src, dst) } catch (_: Exception) {}
                     safCopyNanos += System.nanoTime() - safStart
                 }
 
@@ -483,7 +446,6 @@ class MainActivity : AppCompatActivity() {
                     copied++
                     copiedPaths.add(dst.absolutePath)
 
-                    // Se è "cut" ma renameTo non è riuscito, elimina l'originale
                     if (action == "cut" && !renamed && dst.absolutePath != src.absolutePath && src.exists()) {
                         val deleteStart = System.nanoTime()
                         try {
@@ -494,7 +456,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // Una sola scansione MediaStore per tutti i file copiati
             val scanStart = System.nanoTime()
             scanPaths(copiedPaths)
             val scanNanos = System.nanoTime() - scanStart
@@ -508,7 +469,7 @@ class MainActivity : AppCompatActivity() {
                 if (finalCopied > 0) {
                     Toast.makeText(
                         this,
-                        "${if (wasCut) "Spostati" else "Copiati"} $finalCopied file",
+                        if (wasCut) "Spostati $finalCopied file" else "Copiati $finalCopied file",
                         Toast.LENGTH_SHORT
                     ).show()
                     clipboardPaths.clear()
@@ -562,7 +523,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // === COPIA — buffer 128 KB =================================
+    // === COPIA — buffer 128 KB ===
     // ============================================================
     private fun copyFile(src: File, dst: File) {
         dst.parentFile?.mkdirs()
@@ -592,7 +553,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // === SAF — usato SOLO per SD esterna, OTG, /Android/data/ ===
+    // === SAF — fallback ===
     // ============================================================
     private fun copyViaSaf(src: File, dst: File): Boolean {
         return try {
@@ -652,9 +613,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // === MENU ⋮ ================================================
+    // === MENU ⋮ ===
     // ============================================================
-
     private fun showSelectionMoreMenu() {
         if (selectedPaths.isEmpty()) return
 
@@ -1116,8 +1076,9 @@ class MainActivity : AppCompatActivity() {
         return doc
     }
 
-    // ---------- DIAGNOSTICA ----------
-
+    // ============================================================
+    // === DIAGNOSTICA ===
+    // ============================================================
     private fun formatDiagnosticMs(nanos: Long): String {
         return String.format(java.util.Locale.US, "%.2f s", nanos / 1_000_000_000.0)
     }
@@ -1130,6 +1091,9 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    // ============================================================
+    // === LOAD DIRECTORY — conteggio figli in BACKGROUND ===
+    // ============================================================
     private fun loadDirectory(
         path: String,
         resetCategory: Boolean = false,
@@ -1153,21 +1117,13 @@ class MainActivity : AppCompatActivity() {
                 else {
                     val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
                     filtered.map { f ->
-                        val childrenCount = if (f.isDirectory) {
-                            try {
-                                val children = f.list()
-                                if (children == null) 0
-                                else if (showHidden) children.size
-                                else children.count { !it.startsWith(".") }
-                            } catch (_: Exception) { 0 }
-                        } else 0
-
+                        // ❌ NIENTE list() qui — childrenCount = 0
                         FileItem(
                             file = f, name = f.name, path = f.absolutePath,
                             isDirectory = f.isDirectory,
                             size = if (f.isFile) f.length() else 0L,
                             lastModified = f.lastModified(),
-                            childrenCount = childrenCount
+                            childrenCount = 0
                         )
                     }
                 }
@@ -1182,6 +1138,26 @@ class MainActivity : AppCompatActivity() {
                 applyFilters()
                 updatePasteButton()
                 onComplete?.invoke(System.nanoTime() - refreshStart)
+
+                // ✅ Calcola i conteggi DOPO, in background
+                executor.execute {
+                    val updated = result.map { item ->
+                        if (item.isDirectory) {
+                            try {
+                                val count = item.file.list()?.let { arr ->
+                                    if (showHidden) arr.size else arr.count { !it.startsWith(".") }
+                                } ?: 0
+                                item.copy(childrenCount = count)
+                            } catch (_: Exception) { item }
+                        } else item
+                    }
+                    mainHandler.post {
+                        if (currentPath == path) {
+                            allItems = updated
+                            applyFilters()
+                        }
+                    }
+                }
             }
         }
     }
