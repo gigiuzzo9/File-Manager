@@ -201,7 +201,7 @@ class MainActivity : AppCompatActivity() {
     /** Elimina un file usando la syscall unlink() diretta del kernel */
     private fun deleteFileFast(file: File): Boolean {
         return try {
-            Os.unlink(file.absolutePath)
+          Os.remove(file.absolutePath)
             true
         } catch (e: Exception) {
             false
