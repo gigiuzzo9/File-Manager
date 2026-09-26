@@ -287,7 +287,10 @@ class MainActivity : AppCompatActivity() {
                                 }
                             }
 
-                            if (ok) deleted++
+                            if (ok) {
+                                deleted++
+                                scanPath(path)
+                            }
                         } catch (_: Exception) {}
                     }
 
@@ -1668,7 +1671,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COPIA/INCOLLA ----------
+    // ---------- COPIA/INCOLLA (con renameTo per taglia) ----------
 
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
@@ -1694,7 +1697,12 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        Toast.makeText(this, "Copia in corso...", Toast.LENGTH_SHORT).show()
+        val isCut = action == "cut"
+        Toast.makeText(
+            this,
+            if (isCut) "Spostamento in corso..." else "Copia in corso...",
+            Toast.LENGTH_SHORT
+        ).show()
 
         executor.execute {
             var copied = 0
@@ -1713,56 +1721,71 @@ class MainActivity : AppCompatActivity() {
 
                 var ok = false
 
-                // Tentativo 1: File diretto (VELOCE se hai MANAGE_EXTERNAL_STORAGE)
-                if (hasStoragePermission()) {
+                // === OTTIMIZZAZIONE: se è "taglia" e stessa partizione, usa renameTo ===
+                if (isCut) {
                     try {
-                        if (src.isDirectory) {
-                            copyDirectoryRecursive(src, dst)
-                        } else {
-                            copyFile(src, dst)
+                        if (src.renameTo(dst)) {
+                            ok = true
+                            scanPath(dst.absolutePath)
                         }
-                        ok = true
-                    } catch (e: Exception) {
-                        errorMsg += "\n${src.name}: ${e.message}"
-                    }
+                    } catch (_: Exception) {}
                 }
+                // =========================================================================
 
-                // Tentativo 2: SAF (fallback, più lento)
                 if (!ok) {
-                    try {
-                        ok = copyViaSaf(src, dst)
-                    } catch (e: Exception) {
-                        errorMsg += "\n${src.name} (SAF): ${e.message}"
-                    }
-                }
-
-                if (ok) {
-                    copied++
-                    scanPath(dst.absolutePath)
-
-                    if (action == "cut" && dst.absolutePath != src.absolutePath) {
+                    // Tentativo 1: File diretto (VELOCE se hai MANAGE_EXTERNAL_STORAGE)
+                    if (hasStoragePermission()) {
                         try {
-                            var delOk = if (src.isDirectory) src.deleteRecursively() else src.delete()
-                            if (!delOk) {
-                                val doc = getSafDocumentFile(src.absolutePath)
-                                if (doc != null) {
-                                    delOk = if (doc.isDirectory) deleteDocumentRecursive(doc) else doc.delete()
-                                }
+                            if (src.isDirectory) {
+                                copyDirectoryRecursive(src, dst)
+                            } else {
+                                copyFile(src, dst)
                             }
-                        } catch (_: Exception) {}
+                            ok = true
+                        } catch (e: Exception) {
+                            errorMsg += "\n${src.name}: ${e.message}"
+                        }
+                    }
+
+                    // Tentativo 2: SAF (fallback, più lento)
+                    if (!ok) {
+                        try {
+                            ok = copyViaSaf(src, dst)
+                        } catch (e: Exception) {
+                            errorMsg += "\n${src.name} (SAF): ${e.message}"
+                        }
+                    }
+
+                    if (ok) {
+                        scanPath(dst.absolutePath)
+
+                        // Se "cut", elimina l'originale (con fallback SAF)
+                        if (isCut && dst.absolutePath != src.absolutePath) {
+                            try {
+                                var delOk = if (src.isDirectory) src.deleteRecursively() else src.delete()
+                                if (!delOk) {
+                                    val doc = getSafDocumentFile(src.absolutePath)
+                                    if (doc != null) {
+                                        delOk = if (doc.isDirectory) deleteDocumentRecursive(doc) else doc.delete()
+                                    }
+                                }
+                                if (delOk) scanPath(src.absolutePath)
+                            } catch (_: Exception) {}
+                        }
                     }
                 }
+
+                if (ok) copied++
             }
 
             val finalCopied = copied
             val finalErr = errorMsg
-            val wasCut = action == "cut"
 
             mainHandler.post {
                 if (finalCopied > 0) {
                     Toast.makeText(
                         this,
-                        if (wasCut) "Spostati $finalCopied file" else "Copiati $finalCopied file",
+                        if (isCut) "Spostati $finalCopied file" else "Copiati $finalCopied file",
                         Toast.LENGTH_SHORT
                     ).show()
                     clipboardPaths.clear()
@@ -1936,9 +1959,7 @@ class MainActivity : AppCompatActivity() {
                 deleteRecursively(child)
             }
         }
-        val deleted = file.delete()
-        if (deleted) deleteFromMediaStore(file.absolutePath)
-        return deleted
+        return file.delete()
     }
 
     // ---------- MEDIASTORE ----------
