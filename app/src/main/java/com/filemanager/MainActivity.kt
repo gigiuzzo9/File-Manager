@@ -185,28 +185,8 @@ class MainActivity : AppCompatActivity() {
 
     // ============================================================
     // === FUNZIONI OTTIMIZZATE PER COPIA / SPOSTA / ELIMINA ===
-    // === NIENTE fsync(), NIENTE flush(), buffer 1 MB ===
     // ============================================================
 
-    /** Sposta un file/cartella usando Files.move() (più affidabile di Os.rename) */
-    private fun moveFileFast(src: File, dst: File): Boolean {
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                java.nio.file.Files.move(
-                    src.toPath(),
-                    dst.toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
-                )
-                true
-            } else {
-                src.renameTo(dst)
-            }
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    /** Elimina un file direttamente */
     private fun deleteFileFast(file: File): Boolean {
         return try {
             file.delete()
@@ -215,7 +195,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Elimina ricorsivamente una cartella */
     private fun deleteRecursivelyFast(file: File): Boolean {
         if (file.isDirectory) {
             val children = file.listFiles()
@@ -230,8 +209,6 @@ class MainActivity : AppCompatActivity() {
 
     // ============================================================
 
-    // ---------- ICONA TOGGLE VISTA ----------
-
     private fun updateViewToggleIcon() {
         btnViewToggle.setImageResource(if (isGrid) R.drawable.grid else R.drawable.list)
         val tintColor = MaterialColors.getColor(
@@ -241,14 +218,10 @@ class MainActivity : AppCompatActivity() {
         btnViewToggle.setColorFilter(tintColor)
     }
 
-    // ---------- PULSANTE INCOLLA IN actionsRow ----------
-
     private fun updatePasteButton() {
         val shouldShow = !selectionMode && clipboardPaths.isNotEmpty()
         btnPaste.visibility = if (shouldShow) View.VISIBLE else View.GONE
     }
-
-    // ---------- SELEZIONE MULTIPLA ----------
 
     private fun enterSelectionMode(item: FileItem) {
         selectionMode = true
@@ -301,8 +274,6 @@ class MainActivity : AppCompatActivity() {
             updatePasteButton()
         }
     }
-
-    // ---------- ELIMINA SELEZIONATI ----------
 
     private fun deleteSelectedFiles() {
         if (selectedPaths.isEmpty()) return
@@ -360,8 +331,6 @@ class MainActivity : AppCompatActivity() {
         return doc.delete()
     }
 
-    // ---------- COPIA (NON esce dalla selezione) ----------
-
     private fun copySelectedFiles(action: String) {
         if (selectedPaths.isEmpty()) return
         clipboardPaths.clear()
@@ -374,8 +343,6 @@ class MainActivity : AppCompatActivity() {
         ).show()
         updateSelectionUI()
     }
-
-    // ---------- MENU ⋮ DELLA SELEZIONE ----------
 
     private fun showSelectionMoreMenu() {
         if (selectedPaths.isEmpty()) return
@@ -523,8 +490,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COMPRIMI MULTI ----------
-
     private fun comprimiZipSelezioneMultipla() {
         if (selectedPaths.isEmpty()) return
 
@@ -625,8 +590,6 @@ class MainActivity : AppCompatActivity() {
             false
         }
     }
-
-    // ---------- CARD STORAGE ----------
 
     private fun updateStorageCards() {
         storageRow.removeAllViews()
@@ -814,8 +777,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- PERMESSI ----------
-
     private fun hasStoragePermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             Environment.isExternalStorageManager()
@@ -851,8 +812,6 @@ class MainActivity : AppCompatActivity() {
             loadDirectory(currentPath)
         }
     }
-
-    // ---------- SAF ----------
 
     private fun requestSaf(onGranted: () -> Unit) {
         if (safTreeUri != null) {
@@ -911,8 +870,6 @@ class MainActivity : AppCompatActivity() {
         }
         return doc
     }
-
-    // ---------- LETTURA DIRECTORY ----------
 
     private fun loadDirectory(path: String, resetCategory: Boolean = false) {
         currentPath = path
@@ -1165,8 +1122,6 @@ class MainActivity : AppCompatActivity() {
             recycler.scrollToPosition(firstVisible)
         }
     }
-
-    // ---------- APERTURA FILE ----------
 
     private fun getCategoryKey(mimeType: String, fileName: String): String {
         return when {
@@ -1448,8 +1403,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COMPRIMI SINGOLO ----------
-
     private fun comprimiZip(item: FileItem) {
         val zipName = if (item.isDirectory) "${item.name}.zip" else item.name.substringBeforeLast(".") + ".zip"
 
@@ -1556,8 +1509,6 @@ class MainActivity : AppCompatActivity() {
             zos.closeEntry()
         }
     }
-
-    // ---------- DECOMPRIMI ----------
 
     private fun decomprimiZip(item: FileItem) {
         if (!item.name.lowercase().endsWith(".zip")) {
@@ -1696,8 +1647,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- CONDIVIDI ----------
-
     private fun shareFile(item: FileItem) {
         try {
             val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
@@ -1713,8 +1662,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COPIA/INCOLLA (OTTIMIZZATA) ----------
-
+    // ============================================================
+    // === COPIA/INCOLLA IN STILE FOSSIFY ===
+    // === renameTo() diretto per sposta (istantaneo) ===
+    // === copia diretta senza SAF se non serve ===
+    // ============================================================
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
             Toast.makeText(this, "Niente negli appunti", Toast.LENGTH_SHORT).show()
@@ -1763,51 +1715,41 @@ class MainActivity : AppCompatActivity() {
 
                 var ok = false
 
-                // === TENTATIVO 1: Files.move() per "cut" ===
+                // === SPOSTAMENTO (cut) → renameTo() diretto come Fossify ===
                 if (isCut) {
-                    if (moveFileFast(src, dst)) {
-                        ok = true
-                    }
-                }
-
-                // === TENTATIVO 2: copia veloce ===
-                if (!ok) {
-                    if (hasStoragePermission()) {
-                        try {
-                            if (src.isDirectory) {
-                                copyDirectoryRecursive(src, dst)
-                            } else {
-                                copyFile(src, dst)
-                            }
+                    try {
+                        if (src.renameTo(dst)) {
+                            try { deleteFromMediaStore(srcPath) } catch (_: Exception) {}
                             ok = true
-                        } catch (e: Exception) {
-                            errorMsg += "\n${src.name}: ${e.message}"
                         }
-                    }
+                    } catch (_: Exception) {}
                 }
 
-                // === TENTATIVO 3: SAF ===
+                // === COPIA (o fallback del cut se renameTo fallisce) ===
                 if (!ok) {
                     try {
-                        ok = copyViaSaf(src, dst)
+                        if (src.isDirectory) {
+                            copyDirectoryRecursive(src, dst)
+                        } else {
+                            copyFile(src, dst)
+                        }
+                        ok = true
+
+                        if (isCut && dst.absolutePath != src.absolutePath) {
+                            try {
+                                if (src.isDirectory) {
+                                    deleteRecursivelyFast(src)
+                                } else {
+                                    deleteFileFast(src)
+                                }
+                            } catch (_: Exception) {}
+                        }
                     } catch (e: Exception) {
-                        errorMsg += "\n${src.name} (SAF): ${e.message}"
+                        errorMsg += "\n${src.name}: ${e.message}"
                     }
                 }
 
-                if (ok) {
-                    copied++
-
-                    if (isCut && dst.absolutePath != src.absolutePath) {
-                        try {
-                            if (src.isDirectory) {
-                                deleteRecursivelyFast(src)
-                            } else {
-                                deleteFileFast(src)
-                            }
-                        } catch (_: Exception) {}
-                    }
-                }
+                if (ok) copied++
             }
 
             val finalCopied = copied
@@ -1835,6 +1777,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+    // ============================================================
 
     private fun generateUniqueName(dir: File, originalName: String): String {
         val dotIndex = originalName.lastIndexOf('.')
@@ -1909,7 +1852,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // === COPIA VELOCE: copyTo con buffer 1 MB, NIENTE force() / fsync() ===
     private fun copyFile(src: File, dst: File) {
         try {
             FileInputStream(src).use { input ->
@@ -1943,8 +1885,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- RINOMINA ----------
-
     private fun renameItem(item: FileItem) {
         val input = EditText(this)
         input.setText(item.name)
@@ -1958,7 +1898,7 @@ class MainActivity : AppCompatActivity() {
                 try {
                     val parent = item.file.parentFile
                     val newFile = File(parent, newName)
-                    if (moveFileFast(item.file, newFile)) {
+                    if (item.file.renameTo(newFile)) {
                         updateInMediaStore(item.path, newFile.absolutePath)
                         scanPath(newFile.absolutePath)
                         Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
@@ -1988,8 +1928,6 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("Annulla", null)
             .show()
     }
-
-    // ---------- MEDIASTORE ----------
 
     private fun deleteFromMediaStore(path: String) {
         try {
@@ -2071,8 +2009,6 @@ class MainActivity : AppCompatActivity() {
             sendBroadcast(intent)
         } catch (_: Exception) {}
     }
-
-    // ---------- ALTRO ----------
 
     private fun showItemInfo(item: FileItem) {
         val info = buildString {
