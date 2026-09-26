@@ -201,6 +201,36 @@ class MainActivity : AppCompatActivity() {
         btnPaste.visibility = if (shouldShow) View.VISIBLE else View.GONE
     }
 
+    // ============================================================
+    // === HELPER: SAF NECESSARIO? (come Fossify) ================
+    // === SAF solo per SD esterna, OTG, /Android/data/, /Android/obb/
+    // === Tutto il resto su /storage/emulated/0 → File diretto ===
+    // ============================================================
+    private fun needsSaf(path: String): Boolean {
+        val root = rootInternal
+
+        // Fuori dalla memoria interna principale → SAF
+        if (!path.startsWith(root)) return true
+
+        // Percorso relativo
+        val rel = path.removePrefix(root).trimStart('/')
+
+        // /Android/data/ o /Android/obb/ → SAF
+        if (rel.startsWith("Android/data/") || rel.startsWith("Android/obb/")) return true
+
+        // /storage/XXXX-XXXX/ (SD esterna) → SAF
+        if (path.startsWith("/storage/") && !path.startsWith(root + "/") && path != root) return true
+
+        // /mnt/media_rw/ (OTG) → SAF
+        if (path.startsWith("/mnt/media_rw/")) return true
+
+        return false
+    }
+
+    // ============================================================
+    // === SELEZIONE MULTIPLA ====================================
+    // ============================================================
+
     private fun enterSelectionMode(item: FileItem) {
         selectionMode = true
         selectedPaths.clear()
@@ -253,10 +283,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ==========================================================
-    // === ELIMINA — File diretto PRIMA, SAF solo se fallisce ===
-    // === NIENTE MediaStore per file ===
-    // ==========================================================
+    // ============================================================
+    // === ELIMINA — SAF solo se il percorso lo richiede ===
+    // ============================================================
     private fun deleteSelectedFiles() {
         if (selectedPaths.isEmpty()) return
 
@@ -279,13 +308,13 @@ class MainActivity : AppCompatActivity() {
                         try {
                             val f = File(path)
 
-                            // === 1) File diretto PRIMA ===
+                            // === 1) FILE DIRETTO PRIMA ===
                             val directStart = System.nanoTime()
                             var ok = if (f.isDirectory) deleteRecursively(f) else f.delete()
                             directDeleteNanos += System.nanoTime() - directStart
 
-                            // === 2) SAF SOLO se File fallisce ===
-                            if (!ok) {
+                            // === 2) SAF solo se necessario E se File fallisce ===
+                            if (!ok && needsSaf(path)) {
                                 val safStart = System.nanoTime()
                                 val doc = getSafDocumentFile(path)
                                 if (doc != null) {
@@ -324,7 +353,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /** Eliminazione ricorsiva SENZA MediaStore per file */
     private fun deleteRecursively(file: File): Boolean {
         if (file.isDirectory) {
             val children = file.listFiles()
@@ -362,6 +390,270 @@ class MainActivity : AppCompatActivity() {
         ).show()
         updateSelectionUI()
     }
+
+    // ============================================================
+    // === COPIA/INCOLLA — SAF solo per percorsi che lo richiedono ===
+    // ============================================================
+    private fun pasteFromClipboard() {
+        if (clipboardPaths.isEmpty()) {
+            Toast.makeText(this, "Niente negli appunti", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val srcPaths = clipboardPaths.toList()
+        val action = clipboardAction
+        val dstDir = File(currentPath)
+
+        val existingSrc = srcPaths.filter { File(it).exists() }
+        if (existingSrc.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("Errore Incolla")
+                .setMessage("Nessun file originale trovato")
+                .setPositiveButton("OK", null)
+                .show()
+            clipboardPaths.clear()
+            clipboardAction = null
+            exitSelectionMode()
+            updatePasteButton()
+            return
+        }
+
+        val destNeedsSaf = needsSaf(currentPath)
+
+        Toast.makeText(
+            this,
+            if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
+            Toast.LENGTH_SHORT
+        ).show()
+
+        executor.execute {
+            val operationStart = System.nanoTime()
+            var directCopyNanos = 0L
+            var safCopyNanos = 0L
+            var cutDeleteNanos = 0L
+            var copied = 0
+            var errorMsg = ""
+            val copiedPaths = ArrayList<String>()
+
+            for (srcPath in existingSrc) {
+                val src = File(srcPath)
+
+                var dstName = src.name
+                var dst = File(dstDir, dstName)
+
+                if (dst.absolutePath == src.absolutePath || dst.exists()) {
+                    dstName = generateUniqueName(dstDir, src.name)
+                    dst = File(dstDir, dstName)
+                }
+
+                var ok = false
+                var renamed = false
+
+                // === 1) FILE DIRETTO PRIMA (sempre) ===
+                val directStart = System.nanoTime()
+                try {
+                    if (action == "cut" && !destNeedsSaf) {
+                        renamed = src.renameTo(dst)
+                        ok = renamed
+                    }
+                    if (!ok) {
+                        if (src.isDirectory) {
+                            copyDirectoryRecursive(src, dst)
+                        } else {
+                            copyFile(src, dst)
+                        }
+                        ok = true
+                    }
+                } catch (e: Exception) {
+                    errorMsg += "\n${src.name}: ${e.message}"
+                    ok = false
+                }
+                directCopyNanos += System.nanoTime() - directStart
+
+                // === 2) SAF SOLO SE il percorso lo richiede E File ha fallito ===
+                if (!ok && destNeedsSaf) {
+                    val safStart = System.nanoTime()
+                    try {
+                        ok = copyViaSaf(src, dst)
+                    } catch (_: Exception) { ok = false }
+                    safCopyNanos += System.nanoTime() - safStart
+                }
+
+                if (ok) {
+                    copied++
+                    copiedPaths.add(dst.absolutePath)
+
+                    // Se è "cut" ma renameTo non è riuscito, elimina l'originale
+                    if (action == "cut" && !renamed && dst.absolutePath != src.absolutePath && src.exists()) {
+                        val deleteStart = System.nanoTime()
+                        try {
+                            if (src.isDirectory) deleteRecursively(src) else src.delete()
+                        } catch (_: Exception) {}
+                        cutDeleteNanos += System.nanoTime() - deleteStart
+                    }
+                }
+            }
+
+            // Una sola scansione MediaStore per tutti i file copiati
+            val scanStart = System.nanoTime()
+            scanPaths(copiedPaths)
+            val scanNanos = System.nanoTime() - scanStart
+
+            val finalCopied = copied
+            val finalErr = errorMsg
+            val wasCut = action == "cut"
+            val operationNanos = System.nanoTime() - operationStart
+
+            mainHandler.post {
+                if (finalCopied > 0) {
+                    Toast.makeText(
+                        this,
+                        "${if (wasCut) "Spostati" else "Copiati"} $finalCopied file",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    clipboardPaths.clear()
+                    clipboardAction = null
+                    exitSelectionMode()
+                    updatePasteButton()
+                    loadDirectory(currentPath) { refreshNanos ->
+                        showDiagnostic(
+                            "Diagnostica incolla",
+                            listOf(
+                                "Copia diretta (File): ${formatDiagnosticMs(directCopyNanos)}",
+                                "Copia via SAF (fallback): ${formatDiagnosticMs(safCopyNanos)}",
+                                "Cancellazione sorgente (cut): ${formatDiagnosticMs(cutDeleteNanos)}",
+                                "Scansione MediaStore finale: ${formatDiagnosticMs(scanNanos)}",
+                                "Operazione filesystem: ${formatDiagnosticMs(operationNanos)}",
+                                "Refresh elenco: ${formatDiagnosticMs(refreshNanos)}",
+                                "TOTALE fino a elenco aggiornato: ${formatDiagnosticMs(operationNanos + refreshNanos)}"
+                            )
+                        )
+                    }
+                } else {
+                    AlertDialog.Builder(this)
+                        .setTitle("Errore Incolla")
+                        .setMessage("Nessun file copiato.\n$finalErr")
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
+            }
+        }
+    }
+
+    private fun generateUniqueName(dir: File, originalName: String): String {
+        val dotIndex = originalName.lastIndexOf('.')
+        val baseName: String
+        val extension: String
+        if (dotIndex > 0) {
+            baseName = originalName.substring(0, dotIndex)
+            extension = originalName.substring(dotIndex)
+        } else {
+            baseName = originalName
+            extension = ""
+        }
+
+        var counter = 1
+        var candidate = "${baseName}_$counter$extension"
+        while (File(dir, candidate).exists()) {
+            counter++
+            candidate = "${baseName}_$counter$extension"
+        }
+        return candidate
+    }
+
+    // ============================================================
+    // === COPIA — buffer 128 KB =================================
+    // ============================================================
+    private fun copyFile(src: File, dst: File) {
+        dst.parentFile?.mkdirs()
+        FileInputStream(src).use { input ->
+            FileOutputStream(dst).use { output ->
+                val buffer = ByteArray(128 * 1024)
+                var length: Int
+                while (input.read(buffer).also { length = it } > 0) {
+                    output.write(buffer, 0, length)
+                }
+                output.flush()
+            }
+        }
+        dst.setLastModified(src.lastModified())
+    }
+
+    private fun copyDirectoryRecursive(src: File, dst: File) {
+        if (!dst.exists() && !dst.mkdirs() && !dst.exists()) {
+            throw java.io.IOException("Impossibile creare ${dst.absolutePath}")
+        }
+        val files = src.listFiles() ?: throw java.io.IOException("Impossibile leggere ${src.absolutePath}")
+        for (f in files) {
+            val newFile = File(dst, f.name)
+            if (f.isDirectory) copyDirectoryRecursive(f, newFile)
+            else copyFile(f, newFile)
+        }
+    }
+
+    // ============================================================
+    // === SAF — usato SOLO per SD esterna, OTG, /Android/data/ ===
+    // ============================================================
+    private fun copyViaSaf(src: File, dst: File): Boolean {
+        return try {
+            val parentDir = dst.parentFile ?: return false
+            val parentDoc = getSafDocumentFile(parentDir.absolutePath) ?: return false
+
+            if (src.isDirectory) {
+                val newDir = parentDoc.createDirectory(dst.name) ?: return false
+                copyDirViaSaf(src, newDir)
+                true
+            } else {
+                val mimeType = getMimeType(src.name)
+                val newFile = parentDoc.createFile(mimeType, dst.name) ?: return false
+                contentResolver.openOutputStream(newFile.uri)?.use { output ->
+                    FileInputStream(src).use { input ->
+                        val buffer = ByteArray(128 * 1024)
+                        var length: Int
+                        while (input.read(buffer).also { length = it } > 0) {
+                            output.write(buffer, 0, length)
+                        }
+                        output.flush()
+                    }
+                } ?: return false
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun copyDirViaSaf(src: File, dstDoc: DocumentFile): Boolean {
+        val files = src.listFiles() ?: return false
+        var allOk = true
+        for (f in files) {
+            if (f.isDirectory) {
+                val newDir = dstDoc.createDirectory(f.name)
+                if (newDir == null || !copyDirViaSaf(f, newDir)) allOk = false
+            } else {
+                val mimeType = getMimeType(f.name)
+                val newFile = dstDoc.createFile(mimeType, f.name)
+                if (newFile == null) { allOk = false; continue }
+                try {
+                    contentResolver.openOutputStream(newFile.uri)?.use { output ->
+                        FileInputStream(f).use { input ->
+                            val buffer = ByteArray(128 * 1024)
+                            var length: Int
+                            while (input.read(buffer).also { length = it } > 0) {
+                                output.write(buffer, 0, length)
+                            }
+                            output.flush()
+                        }
+                    }
+                } catch (_: Exception) { allOk = false }
+            }
+        }
+        return allOk
+    }
+
+    // ============================================================
+    // === MENU ⋮ ================================================
+    // ============================================================
 
     private fun showSelectionMoreMenu() {
         if (selectedPaths.isEmpty()) return
@@ -1216,258 +1508,6 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
         }
-    }
-
-    // ==========================================================
-    // === COPIA/INCOLLA — File DIRETTO PRIMA, SAF DOPO ===
-    // ==========================================================
-    private fun pasteFromClipboard() {
-        if (clipboardPaths.isEmpty()) {
-            Toast.makeText(this, "Niente negli appunti", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val srcPaths = clipboardPaths.toList()
-        val action = clipboardAction
-        val dstDir = File(currentPath)
-
-        val existingSrc = srcPaths.filter { File(it).exists() }
-        if (existingSrc.isEmpty()) {
-            AlertDialog.Builder(this)
-                .setTitle("Errore Incolla")
-                .setMessage("Nessun file originale trovato")
-                .setPositiveButton("OK", null)
-                .show()
-            clipboardPaths.clear()
-            clipboardAction = null
-            exitSelectionMode()
-            updatePasteButton()
-            return
-        }
-
-        Toast.makeText(this, "Copia in corso...", Toast.LENGTH_SHORT).show()
-
-        executor.execute {
-            val operationStart = System.nanoTime()
-            var directCopyNanos = 0L
-            var safCopyNanos = 0L
-            var cutDeleteNanos = 0L
-            var copied = 0
-            var errorMsg = ""
-            val copiedPaths = ArrayList<String>()
-
-            for (srcPath in existingSrc) {
-                val src = File(srcPath)
-
-                var dstName = src.name
-                var dst = File(dstDir, dstName)
-
-                if (dst.absolutePath == src.absolutePath || dst.exists()) {
-                    dstName = generateUniqueName(dstDir, src.name)
-                    dst = File(dstDir, dstName)
-                }
-
-                var ok = false
-                var renamed = false
-
-                // === 1) FILE DIRETTO PRIMA (cut usa renameTo, copia usa stream) ===
-                val directStart = System.nanoTime()
-                try {
-                    if (action == "cut") {
-                        renamed = src.renameTo(dst)
-                        ok = renamed
-                    }
-                    if (!ok) {
-                        if (src.isDirectory) copyDirectoryRecursive(src, dst)
-                        else copyFile(src, dst)
-                        ok = true
-                    }
-                } catch (e: Exception) {
-                    errorMsg += "\n${src.name}: ${e.message}"
-                }
-                directCopyNanos += System.nanoTime() - directStart
-
-                // === 2) SAF SOLO SE FILE FALLISCE ===
-                if (!ok) {
-                    val safStart = System.nanoTime()
-                    try { ok = copyViaSaf(src, dst) } catch (_: Exception) {}
-                    safCopyNanos += System.nanoTime() - safStart
-                }
-
-                if (ok) {
-                    copied++
-                    copiedPaths.add(dst.absolutePath)
-
-                    // Se cut e rename non riuscito, elimina originale
-                    if (action == "cut" && !renamed && dst.absolutePath != src.absolutePath && src.exists()) {
-                        val deleteStart = System.nanoTime()
-                        try {
-                            var delOk = if (src.isDirectory) deleteRecursively(src) else src.delete()
-                            if (!delOk) {
-                                val doc = getSafDocumentFile(src.absolutePath)
-                                if (doc != null) delOk = if (doc.isDirectory) deleteDocumentRecursive(doc) else doc.delete()
-                            }
-                        } catch (_: Exception) {}
-                        cutDeleteNanos += System.nanoTime() - deleteStart
-                    }
-                }
-            }
-
-            // UNA SOLA scansione MediaStore per tutti i file copiati
-            val scanStart = System.nanoTime()
-            scanPaths(copiedPaths)
-            val scanNanos = System.nanoTime() - scanStart
-
-            val finalCopied = copied
-            val finalErr = errorMsg
-            val wasCut = action == "cut"
-            val operationNanos = System.nanoTime() - operationStart
-
-            mainHandler.post {
-                if (finalCopied > 0) {
-                    Toast.makeText(
-                        this,
-                        if (wasCut) "Spostati $finalCopied file" else "Copiati $finalCopied file",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    clipboardPaths.clear()
-                    clipboardAction = null
-                    exitSelectionMode()
-                    updatePasteButton()
-                    loadDirectory(currentPath) { refreshNanos ->
-                        showDiagnostic(
-                            "Diagnostica incolla",
-                            listOf(
-                                "Copia diretta (File): ${formatDiagnosticMs(directCopyNanos)}",
-                                "Copia via SAF (fallback): ${formatDiagnosticMs(safCopyNanos)}",
-                                "Cancellazione sorgente (cut): ${formatDiagnosticMs(cutDeleteNanos)}",
-                                "Scansione MediaStore finale: ${formatDiagnosticMs(scanNanos)}",
-                                "Operazione filesystem: ${formatDiagnosticMs(operationNanos)}",
-                                "Refresh elenco: ${formatDiagnosticMs(refreshNanos)}",
-                                "TOTALE fino a elenco aggiornato: ${formatDiagnosticMs(operationNanos + refreshNanos)}"
-                            )
-                        )
-                    }
-                } else {
-                    AlertDialog.Builder(this)
-                        .setTitle("Errore Incolla")
-                        .setMessage("Nessun file copiato.\n$finalErr")
-                        .setPositiveButton("OK", null)
-                        .show()
-                }
-            }
-        }
-    }
-
-    private fun generateUniqueName(dir: File, originalName: String): String {
-        val dotIndex = originalName.lastIndexOf('.')
-        val baseName: String
-        val extension: String
-        if (dotIndex > 0) {
-            baseName = originalName.substring(0, dotIndex)
-            extension = originalName.substring(dotIndex)
-        } else {
-            baseName = originalName
-            extension = ""
-        }
-
-        var counter = 1
-        var candidate = "${baseName}_$counter$extension"
-        while (File(dir, candidate).exists()) {
-            counter++
-            candidate = "${baseName}_$counter$extension"
-        }
-        return candidate
-    }
-
-    // ==========================================================
-    // === COPIA FILE — buffer 128 KB ===
-    // ==========================================================
-    private fun copyFile(src: File, dst: File) {
-        dst.parentFile?.mkdirs()
-        FileInputStream(src).use { input ->
-            FileOutputStream(dst).use { output ->
-                val buffer = ByteArray(128 * 1024)
-                var length: Int
-                while (input.read(buffer).also { length = it } > 0) {
-                    output.write(buffer, 0, length)
-                }
-                output.flush()
-            }
-        }
-        dst.setLastModified(src.lastModified())
-    }
-
-    private fun copyDirectoryRecursive(src: File, dst: File) {
-        if (!dst.exists() && !dst.mkdirs() && !dst.exists()) {
-            throw java.io.IOException("Impossibile creare ${dst.absolutePath}")
-        }
-        val files = src.listFiles() ?: throw java.io.IOException("Impossibile leggere ${src.absolutePath}")
-        for (f in files) {
-            val newFile = File(dst, f.name)
-            if (f.isDirectory) copyDirectoryRecursive(f, newFile)
-            else copyFile(f, newFile)
-        }
-    }
-
-    // ==========================================================
-    // === SAF FALLBACK — solo se File diretto fallisce ===
-    // ==========================================================
-    private fun copyViaSaf(src: File, dst: File): Boolean {
-        return try {
-            val parentDir = dst.parentFile ?: return false
-            val parentDoc = getSafDocumentFile(parentDir.absolutePath) ?: return false
-
-            if (src.isDirectory) {
-                val newDir = parentDoc.createDirectory(dst.name) ?: return false
-                copyDirViaSaf(src, newDir)
-                true
-            } else {
-                val mimeType = getMimeType(src.name)
-                val newFile = parentDoc.createFile(mimeType, dst.name) ?: return false
-                contentResolver.openOutputStream(newFile.uri)?.use { output ->
-                    FileInputStream(src).use { input ->
-                        val buffer = ByteArray(128 * 1024)
-                        var length: Int
-                        while (input.read(buffer).also { length = it } > 0) {
-                            output.write(buffer, 0, length)
-                        }
-                        output.flush()
-                    }
-                } ?: return false
-                true
-            }
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun copyDirViaSaf(src: File, dstDoc: DocumentFile): Boolean {
-        val files = src.listFiles() ?: return false
-        var allOk = true
-        for (f in files) {
-            if (f.isDirectory) {
-                val newDir = dstDoc.createDirectory(f.name)
-                if (newDir == null || !copyDirViaSaf(f, newDir)) allOk = false
-            } else {
-                val mimeType = getMimeType(f.name)
-                val newFile = dstDoc.createFile(mimeType, f.name)
-                if (newFile == null) { allOk = false; continue }
-                try {
-                    contentResolver.openOutputStream(newFile.uri)?.use { output ->
-                        FileInputStream(f).use { input ->
-                            val buffer = ByteArray(128 * 1024)
-                            var length: Int
-                            while (input.read(buffer).also { length = it } > 0) {
-                                output.write(buffer, 0, length)
-                            }
-                            output.flush()
-                        }
-                    }
-                } catch (_: Exception) { allOk = false }
-            }
-        }
-        return allOk
     }
 
     private fun renameItem(item: FileItem) {
