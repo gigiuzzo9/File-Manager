@@ -896,7 +896,6 @@ class MainActivity : AppCompatActivity() {
                                 }
                             } catch (_: Exception) { 0 }
                         } else 0
-
                         FileItem(
                             file = f,
                             name = f.name,
@@ -1135,7 +1134,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openFileWithDefault(item: FileItem) {
-        // APK → gestione speciale per l'installazione
         if (item.name.lowercase().endsWith(".apk")) {
             installApk(item)
             return
@@ -1151,12 +1149,25 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        if (mimeType.startsWith("image/") || mimeType.startsWith("video/")) {
+            val mediaUri = getMediaStoreUriIfAvailable(item.file)
+            if (mediaUri != null) {
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(mediaUri, mimeType)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    startActivity(intent)
+                    return
+                } catch (_: Exception) {}
+            }
+        }
+
         showCustomAppPicker(item, mimeType, categoryKey)
     }
 
     private fun installApk(item: FileItem) {
         try {
-            // Verifica se abbiamo il permesso di installare pacchetti
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (!packageManager.canRequestPackageInstalls()) {
                     AlertDialog.Builder(this)
@@ -1173,7 +1184,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // Abbiamo il permesso → lancia l'installazione
             val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, "application/vnd.android.package-archive")
@@ -1197,6 +1207,36 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Toast.makeText(this, "Errore installazione: ${e.message}", Toast.LENGTH_LONG).show()
         }
+    }
+
+    private fun getMediaStoreUriIfAvailable(file: File): Uri? {
+        try {
+            val projection = arrayOf(MediaStore.MediaColumns._ID)
+            val selection = "${MediaStore.MediaColumns.DATA} = ?"
+            val selectionArgs = arrayOf(file.absolutePath)
+
+            val collection = when {
+                file.name.lowercase().let {
+                    it.endsWith(".jpg") || it.endsWith(".jpeg") || it.endsWith(".png") ||
+                    it.endsWith(".gif") || it.endsWith(".webp") || it.endsWith(".bmp")
+                } -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+
+                file.name.lowercase().let {
+                    it.endsWith(".mp4") || it.endsWith(".mkv") || it.endsWith(".avi") ||
+                    it.endsWith(".mov") || it.endsWith(".webm") || it.endsWith(".3gp")
+                } -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+
+                else -> return null
+            }
+
+            contentResolver.query(collection, projection, selection, selectionArgs, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID))
+                    return Uri.withAppendedPath(collection, id.toString())
+                }
+            }
+        } catch (_: Exception) {}
+        return null
     }
 
     private fun tryOpenWithPackage(item: FileItem, pkgName: String, mimeType: String): Boolean {
@@ -1232,7 +1272,6 @@ class MainActivity : AppCompatActivity() {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
 
-            // 0 = nessun filtro → mostra TUTTE le app che gestiscono il file
             val apps = packageManager.queryIntentActivities(probeIntent, 0)
             val filtered = apps.filter { it.activityInfo.packageName != packageName }
 
@@ -1674,11 +1713,8 @@ class MainActivity : AppCompatActivity() {
 
                 var ok = false
 
-                try {
-                    ok = copyViaSaf(src, dst)
-                } catch (_: Exception) {}
-
-                if (!ok) {
+                // Tentativo 1: File diretto (VELOCE se hai MANAGE_EXTERNAL_STORAGE)
+                if (hasStoragePermission()) {
                     try {
                         if (src.isDirectory) {
                             copyDirectoryRecursive(src, dst)
@@ -1688,6 +1724,15 @@ class MainActivity : AppCompatActivity() {
                         ok = true
                     } catch (e: Exception) {
                         errorMsg += "\n${src.name}: ${e.message}"
+                    }
+                }
+
+                // Tentativo 2: SAF (fallback, più lento)
+                if (!ok) {
+                    try {
+                        ok = copyViaSaf(src, dst)
+                    } catch (e: Exception) {
+                        errorMsg += "\n${src.name} (SAF): ${e.message}"
                     }
                 }
 
@@ -1771,7 +1816,7 @@ class MainActivity : AppCompatActivity() {
                 val newFile = parentDoc.createFile(mimeType, src.name) ?: return false
                 contentResolver.openOutputStream(newFile.uri)?.use { output ->
                     FileInputStream(src).use { input ->
-                        val buffer = ByteArray(8192)
+                        val buffer = ByteArray(256 * 1024)
                         var length: Int
                         while (input.read(buffer).also { length = it } > 0) {
                             output.write(buffer, 0, length)
@@ -1798,7 +1843,7 @@ class MainActivity : AppCompatActivity() {
                 try {
                     contentResolver.openOutputStream(newFile.uri)?.use { output ->
                         FileInputStream(f).use { input ->
-                            val buffer = ByteArray(8192)
+                            val buffer = ByteArray(256 * 1024)
                             var length: Int
                             while (input.read(buffer).also { length = it } > 0) {
                                 output.write(buffer, 0, length)
@@ -1814,7 +1859,7 @@ class MainActivity : AppCompatActivity() {
     private fun copyFile(src: File, dst: File) {
         FileInputStream(src).use { input ->
             FileOutputStream(dst).use { output ->
-                val buffer = ByteArray(8192)
+                val buffer = ByteArray(256 * 1024)
                 var length: Int
                 while (input.read(buffer).also { length = it } > 0) {
                     output.write(buffer, 0, length)
