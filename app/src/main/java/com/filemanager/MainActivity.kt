@@ -522,9 +522,6 @@ class MainActivity : AppCompatActivity() {
         return candidate
     }
 
-    // ============================================================
-    // === COPIA — buffer 128 KB ===
-    // ============================================================
     private fun copyFile(src: File, dst: File) {
         dst.parentFile?.mkdirs()
         FileInputStream(src).use { input ->
@@ -552,9 +549,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ============================================================
-    // === SAF — fallback ===
-    // ============================================================
     private fun copyViaSaf(src: File, dst: File): Boolean {
         return try {
             val parentDir = dst.parentFile ?: return false
@@ -612,9 +606,6 @@ class MainActivity : AppCompatActivity() {
         return allOk
     }
 
-    // ============================================================
-    // === MENU ⋮ ===
-    // ============================================================
     private fun showSelectionMoreMenu() {
         if (selectedPaths.isEmpty()) return
 
@@ -1076,9 +1067,6 @@ class MainActivity : AppCompatActivity() {
         return doc
     }
 
-    // ============================================================
-    // === DIAGNOSTICA ===
-    // ============================================================
     private fun formatDiagnosticMs(nanos: Long): String {
         return String.format(java.util.Locale.US, "%.2f s", nanos / 1_000_000_000.0)
     }
@@ -1092,7 +1080,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // === LOAD DIRECTORY — conteggio figli in BACKGROUND ===
+    // === LOAD DIRECTORY — TEST: childrenCount = 0 ===
     // ============================================================
     private fun loadDirectory(
         path: String,
@@ -1117,9 +1105,11 @@ class MainActivity : AppCompatActivity() {
                 else {
                     val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
                     filtered.map { f ->
-                        // ❌ NIENTE list() qui — childrenCount = 0
+                        // === TEST: childrenCount = 0, niente listFiles() per ogni cartella ===
                         FileItem(
-                            file = f, name = f.name, path = f.absolutePath,
+                            file = f,
+                            name = f.name,
+                            path = f.absolutePath,
                             isDirectory = f.isDirectory,
                             size = if (f.isFile) f.length() else 0L,
                             lastModified = f.lastModified(),
@@ -1138,26 +1128,6 @@ class MainActivity : AppCompatActivity() {
                 applyFilters()
                 updatePasteButton()
                 onComplete?.invoke(System.nanoTime() - refreshStart)
-
-                // ✅ Calcola i conteggi DOPO, in background
-                executor.execute {
-                    val updated = result.map { item ->
-                        if (item.isDirectory) {
-                            try {
-                                val count = item.file.list()?.let { arr ->
-                                    if (showHidden) arr.size else arr.count { !it.startsWith(".") }
-                                } ?: 0
-                                item.copy(childrenCount = count)
-                            } catch (_: Exception) { item }
-                        } else item
-                    }
-                    mainHandler.post {
-                        if (currentPath == path) {
-                            allItems = updated
-                            applyFilters()
-                        }
-                    }
-                }
             }
         }
     }
