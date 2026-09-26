@@ -186,8 +186,6 @@ class MainActivity : AppCompatActivity() {
         executor.shutdown()
     }
 
-    // ---------- ICONA TOGGLE VISTA ----------
-
     private fun updateViewToggleIcon() {
         btnViewToggle.setImageResource(if (isGrid) R.drawable.grid else R.drawable.list)
         val tintColor = MaterialColors.getColor(
@@ -256,9 +254,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ============================================================
-    // === ELIMINAZIONE — OTTIMIZZATA (File API prima, SAF fallback) ===
-    // ============================================================
+    // ---------- ELIMINA — File prima, SAF fallback, niente MediaStore per file ----------
+
     private fun deleteSelectedFiles() {
         if (selectedPaths.isEmpty()) return
 
@@ -279,7 +276,6 @@ class MainActivity : AppCompatActivity() {
                         val file = File(path)
                         var success = false
 
-                        // FILE API
                         try {
                             success = if (file.isDirectory) {
                                 deleteRecursively(file)
@@ -290,7 +286,6 @@ class MainActivity : AppCompatActivity() {
                             success = false
                         }
 
-                        // SAF SOLO COME FALLBACK
                         if (!success) {
                             try {
                                 val doc = getSafDocumentFile(path)
@@ -516,8 +511,6 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
-
-    // ---------- COMPRIMI MULTI ----------
 
     private fun comprimiZipSelezioneMultipla() {
         if (selectedPaths.isEmpty()) return
@@ -901,8 +894,9 @@ class MainActivity : AppCompatActivity() {
         return doc
     }
 
-    // ---------- LETTURA DIRECTORY ----------
-
+    // ============================================================
+    // === LETTURA DIRECTORY — childrenCount calcolato in background ===
+    // ============================================================
     private fun loadDirectory(path: String, resetCategory: Boolean = false) {
         currentPath = path
         txtPath.text = path
@@ -920,18 +914,7 @@ class MainActivity : AppCompatActivity() {
                 if (files == null) null else {
                     val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
                     filtered.map { f ->
-                        val childrenCount = if (f.isDirectory) {
-                            try {
-                                val children = f.listFiles()
-                                if (children == null) {
-                                    0
-                                } else if (showHidden) {
-                                    children.size
-                                } else {
-                                    children.count { !it.name.startsWith(".") }
-                                }
-                            } catch (_: Exception) { 0 }
-                        } else 0
+                        // childrenCount = 0 → NON contiamo più i figli durante il caricamento
                         FileItem(
                             file = f,
                             name = f.name,
@@ -939,7 +922,7 @@ class MainActivity : AppCompatActivity() {
                             isDirectory = f.isDirectory,
                             size = if (f.isFile) f.length() else 0L,
                             lastModified = f.lastModified(),
-                            childrenCount = childrenCount
+                            childrenCount = 0
                         )
                     }
                 }
@@ -953,6 +936,29 @@ class MainActivity : AppCompatActivity() {
                 allItems = result
                 applyFilters()
                 updatePasteButton()
+
+                // Conta i figli in background DOPO aver mostrato la lista
+                executor.execute {
+                    val updated = result.map { item ->
+                        if (item.isDirectory) {
+                            val count = try {
+                                val children = item.file.listFiles()
+                                if (children == null) 0
+                                else if (showHidden) children.size
+                                else children.count { !it.name.startsWith(".") }
+                            } catch (_: Exception) { 0 }
+                            item.copy(childrenCount = count)
+                        } else item
+                    }
+
+                    mainHandler.post {
+                        // Solo se siamo ancora nella stessa cartella
+                        if (currentPath == path) {
+                            allItems = updated
+                            applyFilters()
+                        }
+                    }
+                }
             }
         }
     }
@@ -1114,9 +1120,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ============================================================
-    // === renderList OTTIMIZZATA (riutilizza adapter) ===
-    // ============================================================
     private fun renderList() {
         if (currentLayoutIsGrid != isGrid || recycler.layoutManager == null) {
             val firstVisible = try {
@@ -1705,10 +1708,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ============================================================
-    // === COPIA/INCOLLA — OTTIMIZZATA (File prima, SAF fallback) ===
-    // === Niente scanPath() per file, un solo refresh alla fine ===
-    // ============================================================
+    // ---------- COPIA/INCOLLA ----------
+
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
             Toast.makeText(this, "Niente negli appunti", Toast.LENGTH_SHORT).show()
@@ -1751,7 +1752,6 @@ class MainActivity : AppCompatActivity() {
 
                 var success = false
 
-                // PRIMO TENTATIVO: FILE API
                 try {
                     if (source.isDirectory) {
                         copyDirectoryRecursive(source, target)
@@ -1768,7 +1768,6 @@ class MainActivity : AppCompatActivity() {
                     } catch (_: Exception) {}
                 }
 
-                // SAF SOLO SE FILE API FALLISCE
                 if (!success) {
                     try {
                         success = copyViaSaf(source, target)
@@ -1784,7 +1783,6 @@ class MainActivity : AppCompatActivity() {
 
                 successCount++
 
-                // TAGLIA
                 if (action == "cut") {
                     try {
                         var deleted = if (source.isDirectory) {
@@ -1983,7 +1981,7 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // ---------- MEDIASTORE (solo per rename) ----------
+    // ---------- MEDIASTORE ----------
 
     private fun deleteFromMediaStore(path: String) {
         try {
