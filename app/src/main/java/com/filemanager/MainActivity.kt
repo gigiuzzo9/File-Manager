@@ -19,7 +19,6 @@ import android.os.Looper
 import android.os.StatFs
 import android.os.storage.StorageManager
 import android.os.storage.StorageVolume
-import android.system.Os
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.Settings
@@ -56,8 +55,6 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val REQ_SAF = 1001
-        private const val TAG_PASTE = "PASTE_TEST"
-        private const val TAG_LOAD = "LOAD_TEST"
     }
 
     private lateinit var recycler: RecyclerView
@@ -186,26 +183,39 @@ class MainActivity : AppCompatActivity() {
         executor.shutdown()
     }
 
-    // ---------- FUNZIONI NATIVE ----------
+    // ============================================================
+    // === FUNZIONI OTTIMIZZATE PER COPIA / SPOSTA / ELIMINA ===
+    // === NIENTE fsync(), NIENTE flush(), buffer 1 MB ===
+    // ============================================================
 
+    /** Sposta un file/cartella usando Files.move() (più affidabile di Os.rename) */
     private fun moveFileFast(src: File, dst: File): Boolean {
         return try {
-            Os.rename(src.absolutePath, dst.absolutePath)
-            true
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                java.nio.file.Files.move(
+                    src.toPath(),
+                    dst.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                )
+                true
+            } else {
+                src.renameTo(dst)
+            }
         } catch (e: Exception) {
             false
         }
     }
 
+    /** Elimina un file direttamente */
     private fun deleteFileFast(file: File): Boolean {
         return try {
-            Os.remove(file.absolutePath)
-            true
+            file.delete()
         } catch (e: Exception) {
             false
         }
     }
 
+    /** Elimina ricorsivamente una cartella */
     private fun deleteRecursivelyFast(file: File): Boolean {
         if (file.isDirectory) {
             val children = file.listFiles()
@@ -217,6 +227,8 @@ class MainActivity : AppCompatActivity() {
         }
         return deleteFileFast(file)
     }
+
+    // ============================================================
 
     // ---------- ICONA TOGGLE VISTA ----------
 
@@ -310,6 +322,7 @@ class MainActivity : AppCompatActivity() {
                     for (path in pathsToDelete) {
                         try {
                             val f = File(path)
+
                             var ok = if (f.isDirectory) deleteRecursivelyFast(f) else deleteFileFast(f)
 
                             if (!ok) {
@@ -347,7 +360,7 @@ class MainActivity : AppCompatActivity() {
         return doc.delete()
     }
 
-    // ---------- COPIA ----------
+    // ---------- COPIA (NON esce dalla selezione) ----------
 
     private fun copySelectedFiles(action: String) {
         if (selectedPaths.isEmpty()) return
@@ -899,11 +912,9 @@ class MainActivity : AppCompatActivity() {
         return doc
     }
 
-    // ---------- LETTURA DIRECTORY (con LOG) ----------
+    // ---------- LETTURA DIRECTORY ----------
 
     private fun loadDirectory(path: String, resetCategory: Boolean = false) {
-        val t0 = System.currentTimeMillis()
-
         currentPath = path
         txtPath.text = path
         if (resetCategory) {
@@ -953,9 +964,6 @@ class MainActivity : AppCompatActivity() {
                 allItems = result
                 applyFilters()
                 updatePasteButton()
-
-                val elapsed = System.currentTimeMillis() - t0
-                android.util.Log.d(TAG_LOAD, "loadDirectory($path): ${elapsed} ms, ${result.size} file")
             }
         }
     }
@@ -1607,7 +1615,6 @@ class MainActivity : AppCompatActivity() {
                                     while (zis.read(buffer).also { length = it } > 0) {
                                         fos.write(buffer, 0, length)
                                     }
-                                    fos.flush()
                                 }
                                 written = true
                             } catch (_: Exception) {}
@@ -1682,7 +1689,6 @@ class MainActivity : AppCompatActivity() {
                 while (zis.read(buffer).also { length = it } > 0) {
                     fos.write(buffer, 0, length)
                 }
-                fos.flush()
             }
             true
         } catch (e: Exception) {
@@ -1707,7 +1713,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COPIA/INCOLLA (con LOG) ----------
+    // ---------- COPIA/INCOLLA (OTTIMIZZATA) ----------
 
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
@@ -1757,42 +1763,33 @@ class MainActivity : AppCompatActivity() {
 
                 var ok = false
 
-                // === TENTATIVO 1: Os.rename() + LOG ===
+                // === TENTATIVO 1: Files.move() per "cut" ===
                 if (isCut) {
-                    val tRename0 = System.currentTimeMillis()
-                    val renamed = moveFileFast(src, dst)
-                    val tRename1 = System.currentTimeMillis()
-                    android.util.Log.d(TAG_PASTE, "rename(${src.name}): $renamed, ${tRename1 - tRename0} ms")
-                    if (renamed) ok = true
+                    if (moveFileFast(src, dst)) {
+                        ok = true
+                    }
                 }
 
-                // === TENTATIVO 2: copia via File + LOG ===
+                // === TENTATIVO 2: copia veloce ===
                 if (!ok) {
                     if (hasStoragePermission()) {
                         try {
-                            val tCopy0 = System.currentTimeMillis()
                             if (src.isDirectory) {
                                 copyDirectoryRecursive(src, dst)
                             } else {
                                 copyFile(src, dst)
                             }
-                            val tCopy1 = System.currentTimeMillis()
-                            android.util.Log.d(TAG_PASTE, "copia File(${src.name}): ${tCopy1 - tCopy0} ms")
                             ok = true
                         } catch (e: Exception) {
                             errorMsg += "\n${src.name}: ${e.message}"
-                            android.util.Log.e(TAG_PASTE, "copia File errore ${src.name}: ${e.message}")
                         }
                     }
                 }
 
-                // === TENTATIVO 3: SAF + LOG ===
+                // === TENTATIVO 3: SAF ===
                 if (!ok) {
                     try {
-                        val tSaf0 = System.currentTimeMillis()
                         ok = copyViaSaf(src, dst)
-                        val tSaf1 = System.currentTimeMillis()
-                        android.util.Log.d(TAG_PASTE, "SAF(${src.name}): $ok, ${tSaf1 - tSaf0} ms")
                     } catch (e: Exception) {
                         errorMsg += "\n${src.name} (SAF): ${e.message}"
                     }
@@ -1803,14 +1800,11 @@ class MainActivity : AppCompatActivity() {
 
                     if (isCut && dst.absolutePath != src.absolutePath) {
                         try {
-                            val tDel0 = System.currentTimeMillis()
                             if (src.isDirectory) {
                                 deleteRecursivelyFast(src)
                             } else {
                                 deleteFileFast(src)
                             }
-                            val tDel1 = System.currentTimeMillis()
-                            android.util.Log.d(TAG_PASTE, "delete original(${src.name}): ${tDel1 - tDel0} ms")
                         } catch (_: Exception) {}
                     }
                 }
@@ -1877,12 +1871,11 @@ class MainActivity : AppCompatActivity() {
                 val newFile = parentDoc.createFile(mimeType, src.name) ?: return false
                 contentResolver.openOutputStream(newFile.uri)?.use { output ->
                     FileInputStream(src).use { input ->
-                        val buffer = ByteArray(256 * 1024)
+                        val buffer = ByteArray(1024 * 1024)
                         var length: Int
                         while (input.read(buffer).also { length = it } > 0) {
                             output.write(buffer, 0, length)
                         }
-                        output.flush()
                     }
                 } ?: return false
                 true
@@ -1904,12 +1897,11 @@ class MainActivity : AppCompatActivity() {
                 try {
                     contentResolver.openOutputStream(newFile.uri)?.use { output ->
                         FileInputStream(f).use { input ->
-                            val buffer = ByteArray(256 * 1024)
+                            val buffer = ByteArray(1024 * 1024)
                             var length: Int
                             while (input.read(buffer).also { length = it } > 0) {
                                 output.write(buffer, 0, length)
                             }
-                            output.flush()
                         }
                     }
                 } catch (_: Exception) {}
@@ -1917,33 +1909,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // === COPIA VELOCE: copyTo con buffer 1 MB, NIENTE force() / fsync() ===
     private fun copyFile(src: File, dst: File) {
         try {
             FileInputStream(src).use { input ->
                 FileOutputStream(dst).use { output ->
-                    val inputChannel = input.channel
-                    val outputChannel = output.channel
-                    var position = 0L
-                    val size = inputChannel.size()
-
-                    while (position < size) {
-                        position += inputChannel.transferTo(position, size - position, outputChannel)
-                    }
+                    input.copyTo(output, bufferSize = 1024 * 1024)
                 }
             }
             dst.setLastModified(src.lastModified())
         } catch (e: Exception) {
-            FileInputStream(src).use { input ->
-                FileOutputStream(dst).use { output ->
-                    val buffer = ByteArray(256 * 1024)
-                    var length: Int
-                    while (input.read(buffer).also { length = it } > 0) {
-                        output.write(buffer, 0, length)
+            try {
+                FileInputStream(src).use { input ->
+                    FileOutputStream(dst).use { output ->
+                        input.copyTo(output, bufferSize = 1024 * 1024)
                     }
-                    output.flush()
                 }
-            }
-            dst.setLastModified(src.lastModified())
+                dst.setLastModified(src.lastModified())
+            } catch (_: Exception) {}
         }
     }
 
