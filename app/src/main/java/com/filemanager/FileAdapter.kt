@@ -10,12 +10,11 @@ import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.engine.DiskCacheStrategy
 import java.io.File
-import java.util.Locale
 
 class FileAdapter(
-    private val items: List<FileItem>,
-    private val isGrid: Boolean,
-    private val selectionMode: Boolean,
+    private var items: List<FileItem>,
+    private var isGrid: Boolean,
+    private var selectionMode: Boolean,
     private val selectedPaths: Set<String>,
     private val onClick: (FileItem) -> Unit,
     private val onLongClick: (FileItem) -> Unit
@@ -27,9 +26,19 @@ class FileAdapter(
         val meta: TextView? = view.findViewById(R.id.itemMeta)
     }
 
+    fun updateItems(
+        newItems: List<FileItem>,
+        newSelectionMode: Boolean
+    ) {
+        items = newItems
+        selectionMode = newSelectionMode
+        notifyDataSetChanged()
+    }
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
         val layoutId = if (isGrid) R.layout.item_file_grid else R.layout.item_file
-        return VH(LayoutInflater.from(parent.context).inflate(layoutId, parent, false))
+        val view = LayoutInflater.from(parent.context).inflate(layoutId, parent, false)
+        return VH(view)
     }
 
     override fun onBindViewHolder(holder: VH, position: Int) {
@@ -47,66 +56,62 @@ class FileAdapter(
 
         val iconView = holder.icon
         if (iconView != null) {
-            // Cancella un eventuale caricamento precedente quando la riga viene riciclata.
-            Glide.with(iconView).clear(iconView)
+            Glide.with(iconView.context).clear(iconView)
 
             when {
-                item.isDirectory -> iconView.setImageResource(R.drawable.folder)
-                isZip(item.name) -> iconView.setImageResource(R.drawable.zip)
-                isImage(item.name) -> loadPreview(iconView, item, R.drawable.images)
-                isVideo(item.name) -> loadPreview(iconView, item, R.drawable.video)
+                item.isDirectory -> {
+                    iconView.setImageResource(R.drawable.folder)
+                }
+                item.name.lowercase().endsWith(".zip") -> {
+                    iconView.setImageResource(R.drawable.zip)
+                }
                 else -> {
-                    val ext = item.name.substringAfterLast('.', "").lowercase(Locale.ROOT)
-                    iconView.setImageResource(iconForExtension(ext))
+                    val mime = getMimeType(item.name)
+                    val ext = item.name.substringAfterLast('.', "").lowercase()
+
+                    if (mime.startsWith("image/")) {
+                        Glide.with(iconView.context)
+                            .load(File(item.path))
+                            .diskCacheStrategy(DiskCacheStrategy.ALL)
+                            .centerCrop()
+                            .placeholder(R.drawable.images)
+                            .error(R.drawable.images)
+                            .into(iconView)
+                    } else if (mime.startsWith("video/")) {
+                        Glide.with(iconView.context)
+                            .load(File(item.path))
+                            .diskCacheStrategy(DiskCacheStrategy.ALL)
+                            .centerCrop()
+                            .placeholder(R.drawable.video)
+                            .error(R.drawable.video)
+                            .into(iconView)
+                    } else {
+                        iconView.setImageResource(iconForExtension(ext))
+                    }
                 }
             }
         }
 
         val isSelected = selectionMode && selectedPaths.contains(item.path)
-        holder.itemView.setBackgroundColor(
-            if (isSelected) Color.parseColor("#333B82F6") else Color.TRANSPARENT
-        )
+        if (isSelected) {
+            holder.itemView.setBackgroundColor(Color.parseColor("#333B82F6"))
+        } else {
+            holder.itemView.setBackgroundColor(Color.TRANSPARENT)
+        }
 
         holder.itemView.setOnClickListener { onClick(item) }
+
         holder.itemView.setOnLongClickListener {
             onLongClick(item)
             true
         }
     }
 
+    override fun getItemCount() = items.size
+
     override fun onViewRecycled(holder: VH) {
-        holder.icon?.let { Glide.with(it).clear(it) }
         super.onViewRecycled(holder)
-    }
-
-    override fun getItemCount(): Int = items.size
-
-    private fun loadPreview(iconView: ImageView, item: FileItem, placeholder: Int) {
-        Glide.with(iconView)
-            .load(File(item.path))
-            .diskCacheStrategy(DiskCacheStrategy.ALL)
-            .dontAnimate()
-            .centerCrop()
-            .placeholder(placeholder)
-            .error(placeholder)
-            .into(iconView)
-    }
-
-    private fun isZip(name: String): Boolean =
-        name.endsWith(".zip", ignoreCase = true)
-
-    private fun isImage(name: String): Boolean {
-        return when (name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
-            "jpg", "jpeg", "png", "gif", "webp", "bmp" -> true
-            else -> false
-        }
-    }
-
-    private fun isVideo(name: String): Boolean {
-        return when (name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
-            "mp4", "mkv", "avi", "mov", "webm" -> true
-            else -> false
-        }
+        holder.icon?.let { Glide.with(it.context).clear(it) }
     }
 
     private fun iconForExtension(ext: String): Int {
@@ -124,13 +129,34 @@ class FileAdapter(
         }
     }
 
+    private fun getMimeType(name: String): String {
+        val l = name.lowercase()
+        return when {
+            l.endsWith(".jpg") || l.endsWith(".jpeg") -> "image/jpeg"
+            l.endsWith(".png") -> "image/png"
+            l.endsWith(".gif") -> "image/gif"
+            l.endsWith(".webp") -> "image/webp"
+            l.endsWith(".bmp") -> "image/bmp"
+            l.endsWith(".mp3") -> "audio/mpeg"
+            l.endsWith(".wav") -> "audio/wav"
+            l.endsWith(".ogg") -> "audio/ogg"
+            l.endsWith(".m4a") -> "audio/mp4"
+            l.endsWith(".mp4") -> "video/mp4"
+            l.endsWith(".mkv") -> "video/x-matroska"
+            l.endsWith(".avi") -> "video/x-msvideo"
+            l.endsWith(".mov") -> "video/quicktime"
+            l.endsWith(".webm") -> "video/webm"
+            else -> "application/octet-stream"
+        }
+    }
+
     private fun formatSize(bytes: Long): String {
         if (bytes < 1024) return "$bytes B"
         val kb = bytes / 1024.0
-        if (kb < 1024) return String.format(Locale.getDefault(), "%.1f KB", kb)
+        if (kb < 1024) return String.format("%.1f KB", kb)
         val mb = kb / 1024.0
-        if (mb < 1024) return String.format(Locale.getDefault(), "%.1f MB", mb)
+        if (mb < 1024) return String.format("%.1f MB", mb)
         val gb = mb / 1024.0
-        return String.format(Locale.getDefault(), "%.1f GB", gb)
+        return String.format("%.1f GB", gb)
     }
 }
