@@ -73,6 +73,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnPaste: ImageButton
     private lateinit var btnViewToggle: ImageButton
 
+    private var fileAdapter: FileAdapter? = null
+    private var currentLayoutIsGrid: Boolean? = null
+
     private val rootInternal: String
         get() = if (File("/storage/emulated/0").exists()) {
             "/storage/emulated/0"
@@ -254,56 +257,56 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // === ELIMINA — OTTIMIZZATA (niente MediaStore per file) ===
+    // === ELIMINAZIONE — OTTIMIZZATA (File API prima, SAF fallback) ===
     // ============================================================
     private fun deleteSelectedFiles() {
         if (selectedPaths.isEmpty()) return
 
-        val count = selectedPaths.size
-        val pathAtStart = currentPath
+        val paths = selectedPaths.toList()
+        val refreshPath = currentPath
 
         AlertDialog.Builder(this)
             .setTitle("Elimina")
-            .setMessage("Eliminare $count file?")
+            .setMessage("Eliminare ${paths.size} file?")
             .setPositiveButton("Elimina") { _, _ ->
-                val pathsToDelete = selectedPaths.toList()
                 Toast.makeText(this, "Eliminazione in corso...", Toast.LENGTH_SHORT).show()
 
                 executor.execute {
                     var deleted = 0
                     var failed = 0
-                    for (path in pathsToDelete) {
-                        val file = File(path)
-                        var ok = false
 
-                        // Prima File API (veloce)
+                    for (path in paths) {
+                        val file = File(path)
+                        var success = false
+
+                        // FILE API
                         try {
-                            ok = if (file.isDirectory) {
+                            success = if (file.isDirectory) {
                                 deleteRecursively(file)
                             } else {
                                 file.delete()
                             }
                         } catch (_: Exception) {
-                            ok = false
+                            success = false
                         }
 
-                        // SAF solo come fallback
-                        if (!ok) {
+                        // SAF SOLO COME FALLBACK
+                        if (!success) {
                             try {
                                 val doc = getSafDocumentFile(path)
                                 if (doc != null) {
-                                    ok = if (doc.isDirectory) {
+                                    success = if (doc.isDirectory) {
                                         deleteDocumentRecursive(doc)
                                     } else {
                                         doc.delete()
                                     }
                                 }
                             } catch (_: Exception) {
-                                ok = false
+                                success = false
                             }
                         }
 
-                        if (ok) deleted++ else failed++
+                        if (success) deleted++ else failed++
                     }
 
                     val finalDeleted = deleted
@@ -317,7 +320,7 @@ class MainActivity : AppCompatActivity() {
                             else -> "Eliminati $finalDeleted file, $finalFailed non riusciti"
                         }
                         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-                        loadDirectory(pathAtStart)
+                        loadDirectory(refreshPath)
                     }
                 }
             }
@@ -325,10 +328,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /**
-     * Eliminazione ricorsiva SENZA chiamare MediaStore per ogni file.
-     * Il refresh della directory finale si occupa dell'aggiornamento visivo.
-     */
     private fun deleteRecursively(file: File): Boolean {
         if (file.isDirectory) {
             val children = file.listFiles()
@@ -355,7 +354,7 @@ class MainActivity : AppCompatActivity() {
         return doc.delete()
     }
 
-    // ---------- COPIA (NON esce dalla selezione) ----------
+    // ---------- COPIA ----------
 
     private fun copySelectedFiles(action: String) {
         if (selectedPaths.isEmpty()) return
@@ -1115,44 +1114,54 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ============================================================
+    // === renderList OTTIMIZZATA (riutilizza adapter) ===
+    // ============================================================
     private fun renderList() {
-        val firstVisible = try {
-            when (val lm = recycler.layoutManager) {
-                is GridLayoutManager -> lm.findFirstVisibleItemPosition()
-                is LinearLayoutManager -> lm.findFirstVisibleItemPosition()
-                else -> 0
-            }
-        } catch (_: Exception) { 0 }
-
-        recycler.layoutManager = if (isGrid)
-            GridLayoutManager(this, 4)
-        else
-            LinearLayoutManager(this)
-
-        recycler.adapter = FileAdapter(
-            items = displayedItems,
-            isGrid = isGrid,
-            selectionMode = selectionMode,
-            selectedPaths = selectedPaths,
-            onClick = { item ->
-                if (selectionMode) {
-                    toggleSelection(item)
-                } else {
-                    if (item.isDirectory) loadDirectory(item.path)
-                    else openFileWithDefault(item)
+        if (currentLayoutIsGrid != isGrid || recycler.layoutManager == null) {
+            val firstVisible = try {
+                when (val lm = recycler.layoutManager) {
+                    is GridLayoutManager -> lm.findFirstVisibleItemPosition()
+                    is LinearLayoutManager -> lm.findFirstVisibleItemPosition()
+                    else -> 0
                 }
-            },
-            onLongClick = { item ->
-                if (selectionMode) {
-                    toggleSelection(item)
-                } else {
-                    enterSelectionMode(item)
-                }
-            }
-        )
+            } catch (_: Exception) { 0 }
 
-        if (firstVisible > 0 && displayedItems.isNotEmpty()) {
-            recycler.scrollToPosition(firstVisible)
+            recycler.layoutManager = if (isGrid) {
+                GridLayoutManager(this, 4)
+            } else {
+                LinearLayoutManager(this)
+            }
+            currentLayoutIsGrid = isGrid
+
+            fileAdapter = FileAdapter(
+                items = displayedItems,
+                isGrid = isGrid,
+                selectionMode = selectionMode,
+                selectedPaths = selectedPaths,
+                onClick = { item ->
+                    if (selectionMode) {
+                        toggleSelection(item)
+                    } else {
+                        if (item.isDirectory) loadDirectory(item.path)
+                        else openFileWithDefault(item)
+                    }
+                },
+                onLongClick = { item ->
+                    if (selectionMode) {
+                        toggleSelection(item)
+                    } else {
+                        enterSelectionMode(item)
+                    }
+                }
+            )
+            recycler.adapter = fileAdapter
+
+            if (firstVisible > 0 && displayedItems.isNotEmpty()) {
+                recycler.scrollToPosition(firstVisible)
+            }
+        } else {
+            fileAdapter?.updateItems(displayedItems, selectionMode)
         }
     }
 
@@ -1600,6 +1609,7 @@ class MainActivity : AppCompatActivity() {
                                     while (zis.read(buffer).also { length = it } > 0) {
                                         fos.write(buffer, 0, length)
                                     }
+                                    fos.flush()
                                 }
                                 written = true
                             } catch (_: Exception) {}
@@ -1670,6 +1680,7 @@ class MainActivity : AppCompatActivity() {
                 while (zis.read(buffer).also { length = it } > 0) {
                     fos.write(buffer, 0, length)
                 }
+                fos.flush()
             }
             true
         } catch (e: Exception) {
@@ -1695,10 +1706,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // === COPIA/INCOLLA — OTTIMIZZATA ===
-    // === 1. File API PRIMA, SAF solo come fallback ===
-    // === 2. Niente scanPath() per ogni file ===
-    // === 3. Taglio diretto (delete semplice, no MediaStore) ===
+    // === COPIA/INCOLLA — OTTIMIZZATA (File prima, SAF fallback) ===
+    // === Niente scanPath() per file, un solo refresh alla fine ===
     // ============================================================
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
@@ -1708,129 +1717,118 @@ class MainActivity : AppCompatActivity() {
 
         val srcPaths = clipboardPaths.toList()
         val action = clipboardAction
-        val dstDir = File(currentPath)
+        val destination = File(currentPath)
 
-        val existingSrc = srcPaths.filter { File(it).exists() }
-        if (existingSrc.isEmpty()) {
-            AlertDialog.Builder(this)
-                .setTitle("Errore Incolla")
-                .setMessage("Nessun file originale trovato")
-                .setPositiveButton("OK", null)
-                .show()
-            clipboardPaths.clear()
-            clipboardAction = null
-            exitSelectionMode()
-            updatePasteButton()
-            return
-        }
-
-        val isCut = action == "cut"
-        Toast.makeText(this, "Operazione in corso...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(
+            this,
+            if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
+            Toast.LENGTH_SHORT
+        ).show()
 
         executor.execute {
-            var copied = 0
-            var errors = 0
+            var successCount = 0
+            var failedCount = 0
 
-            for (srcPath in existingSrc) {
-                val src = File(srcPath)
-                if (!src.exists()) {
-                    errors++
+            for (sourcePath in srcPaths) {
+                val source = File(sourcePath)
+                if (!source.exists()) {
+                    failedCount++
                     continue
                 }
 
-                var dstName = src.name
-                var dst = File(dstDir, dstName)
+                var destinationName = source.name
+                var target = File(destination, destinationName)
 
-                if (dst.absolutePath == src.absolutePath || dst.exists()) {
-                    dstName = generateUniqueName(dstDir, src.name)
-                    dst = File(dstDir, dstName)
+                if (source.absolutePath == target.absolutePath) {
+                    destinationName = generateUniqueName(destination, source.name)
+                    target = File(destination, destinationName)
                 }
 
-                var ok = false
+                if (target.exists()) {
+                    destinationName = generateUniqueName(destination, source.name)
+                    target = File(destination, destinationName)
+                }
 
-                // =====================================================
-                // 1. PRIMA FILE API (VELOCE)
-                // =====================================================
+                var success = false
+
+                // PRIMO TENTATIVO: FILE API
                 try {
-                    if (src.isDirectory) {
-                        copyDirectoryRecursive(src, dst)
+                    if (source.isDirectory) {
+                        copyDirectoryRecursive(source, target)
                     } else {
-                        copyFile(src, dst)
+                        copyFile(source, target)
                     }
-                    ok = dst.exists()
+                    success = target.exists()
                 } catch (_: Exception) {
-                    ok = false
+                    success = false
                     try {
-                        if (dst.exists()) {
-                            if (dst.isDirectory) {
-                                deleteRecursively(dst)
-                            } else {
-                                dst.delete()
-                            }
+                        if (target.exists()) {
+                            if (target.isDirectory) target.deleteRecursively() else target.delete()
                         }
                     } catch (_: Exception) {}
                 }
 
-                // =====================================================
-                // 2. SAF SOLO SE FILE API FALLISCE
-                // =====================================================
-                if (!ok) {
+                // SAF SOLO SE FILE API FALLISCE
+                if (!success) {
                     try {
-                        ok = copyViaSaf(src, dst)
+                        success = copyViaSaf(source, target)
                     } catch (_: Exception) {
-                        ok = false
+                        success = false
                     }
                 }
 
-                if (ok) {
-                    copied++
+                if (!success) {
+                    failedCount++
+                    continue
+                }
 
-                    // TAGLIO: elimina l'originale (semplice File.delete, senza MediaStore)
-                    if (isCut && src.absolutePath != dst.absolutePath) {
-                        try {
-                            val deleted = if (src.isDirectory) {
-                                deleteRecursively(src)
-                            } else {
-                                src.delete()
-                            }
-                            if (!deleted) {
-                                val doc = getSafDocumentFile(src.absolutePath)
-                                if (doc != null) {
-                                    if (doc.isDirectory) {
-                                        deleteDocumentRecursive(doc)
-                                    } else {
-                                        doc.delete()
-                                    }
+                successCount++
+
+                // TAGLIA
+                if (action == "cut") {
+                    try {
+                        var deleted = if (source.isDirectory) {
+                            source.deleteRecursively()
+                        } else {
+                            source.delete()
+                        }
+                        if (!deleted) {
+                            val doc = getSafDocumentFile(source.absolutePath)
+                            if (doc != null) {
+                                deleted = if (doc.isDirectory) {
+                                    deleteDocumentRecursive(doc)
+                                } else {
+                                    doc.delete()
                                 }
                             }
-                        } catch (_: Exception) {}
-                    }
-                } else {
-                    errors++
+                        }
+                    } catch (_: Exception) {}
                 }
             }
 
-            val finalCopied = copied
-            val finalErrors = errors
+            val finalSuccess = successCount
+            val finalFailed = failedCount
             val wasCut = action == "cut"
 
             mainHandler.post {
-                if (finalCopied > 0) {
-                    val base = if (wasCut) "Spostati $finalCopied file" else "Copiati $finalCopied file"
-                    val message = if (finalErrors > 0) "$base ($finalErrors non riusciti)" else base
-                    Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-                    clipboardPaths.clear()
-                    clipboardAction = null
-                    exitSelectionMode()
-                    updatePasteButton()
-                    loadDirectory(currentPath)
+                clipboardPaths.clear()
+                clipboardAction = null
+                exitSelectionMode()
+                updatePasteButton()
+
+                val message = if (wasCut) {
+                    "Spostati $finalSuccess file"
                 } else {
-                    AlertDialog.Builder(this)
-                        .setTitle("Errore")
-                        .setMessage("Nessun file copiato")
-                        .setPositiveButton("OK", null)
-                        .show()
+                    "Copiati $finalSuccess file"
                 }
+
+                Toast.makeText(
+                    this,
+                    if (finalFailed > 0) "$message • $finalFailed non riusciti" else message,
+                    Toast.LENGTH_SHORT
+                ).show()
+
+                loadDirectory(currentPath)
             }
         }
     }
@@ -1870,11 +1868,12 @@ class MainActivity : AppCompatActivity() {
                 val newFile = parentDoc.createFile(mimeType, src.name) ?: return false
                 contentResolver.openOutputStream(newFile.uri)?.use { output ->
                     FileInputStream(src).use { input ->
-                        val buffer = ByteArray(1024 * 1024)
+                        val buffer = ByteArray(1024 * 64)
                         var length: Int
                         while (input.read(buffer).also { length = it } > 0) {
                             output.write(buffer, 0, length)
                         }
+                        output.flush()
                     }
                 } ?: return false
                 true
@@ -1896,11 +1895,12 @@ class MainActivity : AppCompatActivity() {
                 try {
                     contentResolver.openOutputStream(newFile.uri)?.use { output ->
                         FileInputStream(f).use { input ->
-                            val buffer = ByteArray(1024 * 1024)
+                            val buffer = ByteArray(1024 * 64)
                             var length: Int
                             while (input.read(buffer).also { length = it } > 0) {
                                 output.write(buffer, 0, length)
                             }
+                            output.flush()
                         }
                     }
                 } catch (_: Exception) {}
@@ -1911,19 +1911,23 @@ class MainActivity : AppCompatActivity() {
     private fun copyFile(src: File, dst: File) {
         FileInputStream(src).use { input ->
             FileOutputStream(dst).use { output ->
-                val buffer = ByteArray(1024 * 1024)
-                var length: Int
-                while (input.read(buffer).also { length = it } > 0) {
-                    output.write(buffer, 0, length)
+                val buffer = ByteArray(1024 * 64)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    output.write(buffer, 0, read)
                 }
+                output.flush()
             }
         }
         dst.setLastModified(src.lastModified())
     }
 
     private fun copyDirectoryRecursive(src: File, dst: File) {
-        if (!dst.exists()) dst.mkdirs()
-        val files = src.listFiles() ?: return
+        if (!dst.exists() && !dst.mkdirs()) {
+            throw java.io.IOException("Impossibile creare ${dst.absolutePath}")
+        }
+        val files = src.listFiles() ?: throw java.io.IOException("Impossibile leggere ${src.absolutePath}")
         for (f in files) {
             val newFile = File(dst, f.name)
             if (f.isDirectory) {
