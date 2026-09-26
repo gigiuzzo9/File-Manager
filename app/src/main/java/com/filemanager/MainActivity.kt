@@ -1687,7 +1687,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COPIA/INCOLLA (FIX: scanPath UNA SOLA VOLTA) ----------
+    // ---------- COPIA/INCOLLA ----------
 
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
@@ -1737,7 +1737,6 @@ class MainActivity : AppCompatActivity() {
 
                 var ok = false
 
-                // TENTATIVO 1: se taglia, prova Files.move() (istantaneo)
                 if (isCut) {
                     try {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -1756,7 +1755,6 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 if (!ok) {
-                    // TENTATIVO 2: copia veloce File
                     if (hasStoragePermission()) {
                         try {
                             if (src.isDirectory) {
@@ -1770,7 +1768,6 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
-                    // TENTATIVO 3: SAF
                     if (!ok) {
                         try {
                             ok = copyViaSaf(src, dst)
@@ -1780,7 +1777,6 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     if (ok) {
-                        // Se "cut", elimina l'originale
                         if (isCut && dst.absolutePath != src.absolutePath) {
                             try {
                                 var delOk = false
@@ -1816,7 +1812,6 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 if (ok) copied++
-                // NIENTE scanPath() QUI!
             }
 
             val finalCopied = copied
@@ -1824,9 +1819,6 @@ class MainActivity : AppCompatActivity() {
 
             mainHandler.post {
                 if (finalCopied > 0) {
-                    // UNA SOLA scansione alla fine
-                    scanPath(dstDir.absolutePath)
-
                     Toast.makeText(
                         this,
                         if (isCut) "Spostati $finalCopied file" else "Copiati $finalCopied file",
@@ -2063,13 +2055,53 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ================= FIX: scanPath che NON forza la scansione se già in MediaStore =================
     private fun scanPath(path: String) {
         try {
+            val file = File(path)
+
+            // Se è un file già presente in MediaStore, non forzare la ri-scansione
+            if (file.isFile) {
+                try {
+                    val collection = when {
+                        path.lowercase().let {
+                            it.endsWith(".jpg") || it.endsWith(".jpeg") || it.endsWith(".png") ||
+                            it.endsWith(".gif") || it.endsWith(".webp") || it.endsWith(".bmp")
+                        } -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+
+                        path.lowercase().let {
+                            it.endsWith(".mp4") || it.endsWith(".mkv") || it.endsWith(".avi") ||
+                            it.endsWith(".mov") || it.endsWith(".webm") || it.endsWith(".3gp")
+                        } -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+
+                        path.lowercase().let {
+                            it.endsWith(".mp3") || it.endsWith(".wav") || it.endsWith(".ogg") ||
+                            it.endsWith(".flac") || it.endsWith(".m4a") || it.endsWith(".aac")
+                        } -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+
+                        else -> MediaStore.Files.getContentUri("external")
+                    }
+
+                    val projection = arrayOf(MediaStore.MediaColumns._ID)
+                    val selection = "${MediaStore.MediaColumns.DATA} = ?"
+                    val selectionArgs = arrayOf(path)
+
+                    contentResolver.query(collection, projection, selection, selectionArgs, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            // Già in MediaStore → NON fare broadcast
+                            return
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+
+            // Non è in MediaStore (o è una cartella) → fai la scansione
             val intent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
-            intent.data = Uri.fromFile(File(path))
+            intent.data = Uri.fromFile(file)
             sendBroadcast(intent)
         } catch (_: Exception) {}
     }
+    // =============================================================================================
 
     // ---------- ALTRO ----------
 
