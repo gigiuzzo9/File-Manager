@@ -56,6 +56,8 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val REQ_SAF = 1001
+        private const val TAG_PASTE = "PASTE_TEST"
+        private const val TAG_LOAD = "LOAD_TEST"
     }
 
     private lateinit var recycler: RecyclerView
@@ -184,11 +186,8 @@ class MainActivity : AppCompatActivity() {
         executor.shutdown()
     }
 
-    // ============================================================
-    // === FUNZIONI NATIVE — usano Os.rename e Os.unlink (kernel) ===
-    // ============================================================
+    // ---------- FUNZIONI NATIVE ----------
 
-    /** Sposta un file/cartella usando la syscall rename() diretta del kernel */
     private fun moveFileFast(src: File, dst: File): Boolean {
         return try {
             Os.rename(src.absolutePath, dst.absolutePath)
@@ -198,17 +197,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Elimina un file usando la syscall unlink() diretta del kernel */
     private fun deleteFileFast(file: File): Boolean {
         return try {
-          Os.remove(file.absolutePath)
+            Os.remove(file.absolutePath)
             true
         } catch (e: Exception) {
             false
         }
     }
 
-    /** Elimina ricorsivamente una cartella usando unlink() su ogni file */
     private fun deleteRecursivelyFast(file: File): Boolean {
         if (file.isDirectory) {
             val children = file.listFiles()
@@ -220,8 +217,6 @@ class MainActivity : AppCompatActivity() {
         }
         return deleteFileFast(file)
     }
-
-    // ============================================================
 
     // ---------- ICONA TOGGLE VISTA ----------
 
@@ -295,7 +290,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- ELIMINA SELEZIONATI (con Os.unlink) ----------
+    // ---------- ELIMINA SELEZIONATI ----------
 
     private fun deleteSelectedFiles() {
         if (selectedPaths.isEmpty()) return
@@ -315,11 +310,8 @@ class MainActivity : AppCompatActivity() {
                     for (path in pathsToDelete) {
                         try {
                             val f = File(path)
-
-                            // === Os.unlink() diretto al kernel ===
                             var ok = if (f.isDirectory) deleteRecursivelyFast(f) else deleteFileFast(f)
 
-                            // Fallback SAF
                             if (!ok) {
                                 val doc = getSafDocumentFile(path)
                                 if (doc != null) {
@@ -355,7 +347,7 @@ class MainActivity : AppCompatActivity() {
         return doc.delete()
     }
 
-    // ---------- COPIA (NON esce dalla selezione) ----------
+    // ---------- COPIA ----------
 
     private fun copySelectedFiles(action: String) {
         if (selectedPaths.isEmpty()) return
@@ -907,9 +899,11 @@ class MainActivity : AppCompatActivity() {
         return doc
     }
 
-    // ---------- LETTURA DIRECTORY ----------
+    // ---------- LETTURA DIRECTORY (con LOG) ----------
 
     private fun loadDirectory(path: String, resetCategory: Boolean = false) {
+        val t0 = System.currentTimeMillis()
+
         currentPath = path
         txtPath.text = path
         if (resetCategory) {
@@ -959,6 +953,9 @@ class MainActivity : AppCompatActivity() {
                 allItems = result
                 applyFilters()
                 updatePasteButton()
+
+                val elapsed = System.currentTimeMillis() - t0
+                android.util.Log.d(TAG_LOAD, "loadDirectory($path): ${elapsed} ms, ${result.size} file")
             }
         }
     }
@@ -1710,7 +1707,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COPIA/INCOLLA (con Os.rename) ----------
+    // ---------- COPIA/INCOLLA (con LOG) ----------
 
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
@@ -1760,33 +1757,42 @@ class MainActivity : AppCompatActivity() {
 
                 var ok = false
 
-                // === TENTATIVO 1: Os.rename() — syscall diretta del kernel ===
+                // === TENTATIVO 1: Os.rename() + LOG ===
                 if (isCut) {
-                    if (moveFileFast(src, dst)) {
-                        ok = true
-                    }
+                    val tRename0 = System.currentTimeMillis()
+                    val renamed = moveFileFast(src, dst)
+                    val tRename1 = System.currentTimeMillis()
+                    android.util.Log.d(TAG_PASTE, "rename(${src.name}): $renamed, ${tRename1 - tRename0} ms")
+                    if (renamed) ok = true
                 }
 
-                // === TENTATIVO 2: copia via File ===
+                // === TENTATIVO 2: copia via File + LOG ===
                 if (!ok) {
                     if (hasStoragePermission()) {
                         try {
+                            val tCopy0 = System.currentTimeMillis()
                             if (src.isDirectory) {
                                 copyDirectoryRecursive(src, dst)
                             } else {
                                 copyFile(src, dst)
                             }
+                            val tCopy1 = System.currentTimeMillis()
+                            android.util.Log.d(TAG_PASTE, "copia File(${src.name}): ${tCopy1 - tCopy0} ms")
                             ok = true
                         } catch (e: Exception) {
                             errorMsg += "\n${src.name}: ${e.message}"
+                            android.util.Log.e(TAG_PASTE, "copia File errore ${src.name}: ${e.message}")
                         }
                     }
                 }
 
-                // === TENTATIVO 3: SAF ===
+                // === TENTATIVO 3: SAF + LOG ===
                 if (!ok) {
                     try {
+                        val tSaf0 = System.currentTimeMillis()
                         ok = copyViaSaf(src, dst)
+                        val tSaf1 = System.currentTimeMillis()
+                        android.util.Log.d(TAG_PASTE, "SAF(${src.name}): $ok, ${tSaf1 - tSaf0} ms")
                     } catch (e: Exception) {
                         errorMsg += "\n${src.name} (SAF): ${e.message}"
                     }
@@ -1795,14 +1801,16 @@ class MainActivity : AppCompatActivity() {
                 if (ok) {
                     copied++
 
-                    // Se "cut" → elimina originale con Os.unlink()
                     if (isCut && dst.absolutePath != src.absolutePath) {
                         try {
+                            val tDel0 = System.currentTimeMillis()
                             if (src.isDirectory) {
                                 deleteRecursivelyFast(src)
                             } else {
                                 deleteFileFast(src)
                             }
+                            val tDel1 = System.currentTimeMillis()
+                            android.util.Log.d(TAG_PASTE, "delete original(${src.name}): ${tDel1 - tDel0} ms")
                         } catch (_: Exception) {}
                     }
                 }
@@ -1921,7 +1929,6 @@ class MainActivity : AppCompatActivity() {
                     while (position < size) {
                         position += inputChannel.transferTo(position, size - position, outputChannel)
                     }
-                    outputChannel.force(false)
                 }
             }
             dst.setLastModified(src.lastModified())
