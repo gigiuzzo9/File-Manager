@@ -12,9 +12,9 @@ import com.bumptech.glide.load.engine.DiskCacheStrategy
 import java.io.File
 
 class FileAdapter(
-    private val items: List<FileItem>,
-    private val isGrid: Boolean,
-    private val selectionMode: Boolean,
+    private var items: List<FileItem>,
+    private var isGrid: Boolean,
+    private var selectionMode: Boolean,
     private val selectedPaths: Set<String>,
     private val onClick: (FileItem) -> Unit,
     private val onLongClick: (FileItem) -> Unit
@@ -24,6 +24,15 @@ class FileAdapter(
         val icon: ImageView? = view.findViewById(R.id.itemIcon)
         val name: TextView = view.findViewById(R.id.itemName)
         val meta: TextView? = view.findViewById(R.id.itemMeta)
+    }
+
+    fun updateItems(
+        newItems: List<FileItem>,
+        newSelectionMode: Boolean
+    ) {
+        items = newItems
+        selectionMode = newSelectionMode
+        notifyDataSetChanged()
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
@@ -36,23 +45,20 @@ class FileAdapter(
         val item = items[position]
         holder.name.text = item.name
 
-        // Sotto il nome:
-        // - cartella → "N files" (file + sottocartelle al suo interno)
-        // - file → dimensione
         holder.meta?.text = when {
-    // Risultato di ricerca → mostra il percorso del padre
-    item.searchParentPath.isNotEmpty() -> item.searchParentPath
-    // Cartella → "N files"
-    item.isDirectory -> {
-        val n = item.childrenCount
-        if (n == 1) "1 file" else "$n files"
-    }
-    // File normale → dimensione
-    else -> formatSize(item.size)
-}
+            item.searchParentPath.isNotEmpty() -> item.searchParentPath
+            item.isDirectory -> {
+                val n = item.childrenCount
+                if (n == 1) "1 file" else "$n files"
+            }
+            else -> formatSize(item.size)
+        }
 
         val iconView = holder.icon
         if (iconView != null) {
+            // Cancella eventuale caricamento precedente di Glide
+            Glide.with(iconView.context).clear(iconView)
+
             when {
                 item.isDirectory -> {
                     iconView.setImageResource(R.drawable.folder)
@@ -103,6 +109,11 @@ class FileAdapter(
     }
 
     override fun getItemCount() = items.size
+
+    override fun onViewRecycled(holder: VH) {
+        super.onViewRecycled(holder)
+        holder.icon?.let { Glide.with(it.context).clear(it) }
+    }
 
     private fun iconForExtension(ext: String): Int {
         return when (ext) {
