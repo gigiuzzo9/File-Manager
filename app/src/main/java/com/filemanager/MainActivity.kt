@@ -47,7 +47,6 @@ import com.google.android.material.color.MaterialColors
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.util.ArrayDeque
 import java.util.concurrent.Executors
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -255,7 +254,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // === ELIMINA — versione iterativa e più stabile ===
+    // === ELIMINA — File diretto, SAF solo se File fallisce ===
     // ============================================================
     private fun deleteSelectedFiles() {
         if (selectedPaths.isEmpty()) return
@@ -279,10 +278,12 @@ class MainActivity : AppCompatActivity() {
                         try {
                             val f = File(path)
 
+                            // 1) File diretto
                             val directStart = System.nanoTime()
                             var ok = if (f.isDirectory) deleteRecursively(f) else f.delete()
                             directDeleteNanos += System.nanoTime() - directStart
 
+                            // 2) SAF solo se File fallisce
                             if (!ok) {
                                 val safStart = System.nanoTime()
                                 val doc = getSafDocumentFile(path)
@@ -322,48 +323,20 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun deleteRecursively(root: File): Boolean {
-        if (!root.exists()) return true
-
-        val stack = ArrayDeque<Pair<File, Boolean>>()
-        stack.addLast(root to false)
-
-        var success = true
-
-        while (stack.isNotEmpty()) {
-            val (file, visited) = stack.removeLast()
-
-            if (!file.exists()) continue
-
-            if (file.isDirectory && !visited) {
-                stack.addLast(file to true)
-
-                val children = try {
-                    file.listFiles()
-                } catch (_: Exception) {
-                    null
-                }
-
-                if (children == null) {
-                    success = false
-                    continue
-                }
-
+    private fun deleteRecursively(file: File): Boolean {
+        if (file.isDirectory) {
+            val children = file.listFiles()
+            if (children != null) {
                 for (child in children) {
-                    stack.addLast(child to false)
-                }
-            } else {
-                try {
-                    if (!file.delete() && file.exists()) {
-                        success = false
-                    }
-                } catch (_: Exception) {
-                    success = false
+                    deleteRecursively(child)
                 }
             }
         }
-
-        return success && !root.exists()
+        return try {
+            file.delete()
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun deleteDocumentRecursive(doc: DocumentFile): Boolean {
@@ -389,7 +362,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // === COPIA/INCOLLA — senza scandire le cartelle ===
+    // === COPIA/INCOLLA — File prima, SAF solo come fallback ===
     // ============================================================
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
@@ -444,6 +417,7 @@ class MainActivity : AppCompatActivity() {
                 var ok = false
                 var renamed = false
 
+                // 1) File diretto
                 val directStart = System.nanoTime()
                 try {
                     if (action == "cut") {
@@ -461,6 +435,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 directCopyNanos += System.nanoTime() - directStart
 
+                // 2) SAF solo se File fallisce
                 if (!ok) {
                     val safStart = System.nanoTime()
                     try { ok = copyViaSaf(src, dst) } catch (_: Exception) {}
@@ -481,7 +456,10 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            val scanNanos = 0L
+            val scanStart = System.nanoTime()
+            scanPaths(copiedPaths)
+            val scanNanos = System.nanoTime() - scanStart
+
             val finalCopied = copied
             val finalErr = errorMsg
             val wasCut = action == "cut"
@@ -505,10 +483,10 @@ class MainActivity : AppCompatActivity() {
                                 "Copia diretta (File): ${formatDiagnosticMs(directCopyNanos)}",
                                 "Copia via SAF (fallback): ${formatDiagnosticMs(safCopyNanos)}",
                                 "Cancellazione sorgente (cut): ${formatDiagnosticMs(cutDeleteNanos)}",
+                                "Scansione MediaStore finale: ${formatDiagnosticMs(scanNanos)}",
                                 "Operazione filesystem: ${formatDiagnosticMs(operationNanos)}",
                                 "Refresh elenco: ${formatDiagnosticMs(refreshNanos)}",
-                                "TOTALE fino a elenco aggiornato: ${formatDiagnosticMs(operationNanos + refreshNanos)}",
-                                "MediaStore scan: ${formatDiagnosticMs(scanNanos)}"
+                                "TOTALE fino a elenco aggiornato: ${formatDiagnosticMs(operationNanos + refreshNanos)}"
                             )
                         )
                     }
@@ -1020,6 +998,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun hasStoragePermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun requestStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                    data = Uri.parse("package:$packageName")
+                })
+            } catch (_: Exception) {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            }
+            Toast.makeText(this, "Attiva \"Gestisci tutti i file\"", Toast.LENGTH_LONG).show()
+        } else {
+            requestPermissions(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE), 100)
+        }
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (hasStoragePermission()) loadDirectory(currentPath)
@@ -1115,6 +1117,7 @@ class MainActivity : AppCompatActivity() {
                 else {
                     val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
                     filtered.map { f ->
+                        // ❌ NIENTE list() qui — childrenCount = 0
                         FileItem(
                             file = f, name = f.name, path = f.absolutePath,
                             isDirectory = f.isDirectory,
@@ -1136,6 +1139,7 @@ class MainActivity : AppCompatActivity() {
                 updatePasteButton()
                 onComplete?.invoke(System.nanoTime() - refreshStart)
 
+                // ✅ Calcola i conteggi DOPO, in background
                 executor.execute {
                     val updated = result.map { item ->
                         if (item.isDirectory) {
@@ -1181,91 +1185,435 @@ class MainActivity : AppCompatActivity() {
         renderList()
     }
 
-    private fun renderList() {
-        val items = displayedItems
-        if (fileAdapter == null) {
-            fileAdapter = FileAdapter(
-                items = items,
-                isGrid = isGrid,
-                selectionMode = selectionMode,
-                selectedPaths = selectedPaths,
-                onClick = { item ->
-                    if (selectionMode) toggleSelection(item)
-                    else if (item.isDirectory) loadDirectory(item.path)
-                    else openFileWithDefault(item)
-                },
-                onLongClick = { item ->
-                    if (!selectionMode) {
-                        enterSelectionMode(item)
-                    } else {
-                        toggleSelection(item)
-                    }
-                }
-            )
-            recycler.adapter = fileAdapter
-        } else {
-            fileAdapter?.updateItems(items, selectionMode)
+    private fun searchRecursive(dir: File, query: String, out: MutableList<FileItem>, depth: Int) {
+        if (depth > 8) return
+        val dirName = dir.name
+        if (dirName == "Android" || dirName == ".trash" || dirName == ".thumbnails") return
+        val files = dir.listFiles() ?: return
+        for (f in files) {
+            val name = f.name
+            if (!showHidden && name.startsWith(".")) continue
+            if (name.lowercase().contains(query)) {
+                val parentRelPath = try { dir.absolutePath.removePrefix(rootInternal).trimStart('/') } catch (_: Exception) { "" }
+                out.add(FileItem(f, name, f.absolutePath, f.isDirectory,
+                    if (f.isFile) f.length() else 0L, f.lastModified(), 0,
+                    if (parentRelPath.isEmpty()) "Memoria interna" else parentRelPath))
+            }
+            if (f.isDirectory) searchRecursive(f, query, out, depth + 1)
         }
     }
 
-    private fun searchRecursive(dir: File, query: String, results: MutableList<FileItem>, depth: Int) {
+    private fun categoryFor(name: String): String {
+        val l = name.lowercase()
+        return when {
+            l.endsWith(".jpg") || l.endsWith(".jpeg") || l.endsWith(".png") ||
+            l.endsWith(".gif") || l.endsWith(".webp") || l.endsWith(".bmp") -> "images"
+            l.endsWith(".mp3") || l.endsWith(".wav") || l.endsWith(".ogg") ||
+            l.endsWith(".flac") || l.endsWith(".m4a") || l.endsWith(".aac") -> "audio"
+            l.endsWith(".mp4") || l.endsWith(".mkv") || l.endsWith(".avi") ||
+            l.endsWith(".mov") || l.endsWith(".webm") || l.endsWith(".3gp") -> "video"
+            else -> "documents"
+        }
+    }
+
+    private fun isDocumentFile(name: String): Boolean {
+        val l = name.lowercase()
+        return listOf(".pdf",".doc",".docx",".txt",".rtf",".odt",".xls",".xlsx",".csv",".ods",".ppt",".pptx",".odp",".zip",".rar",".7z",".tar",".gz").any { l.endsWith(it) }
+    }
+
+    private fun setCategory(cat: String) {
+        if (activeCategory == cat) {
+            activeCategory = null
+            loadDirectory(rootInternal, resetCategory = true)
+            return
+        }
+        activeCategory = cat
+        txtPath.text = "Filtro: $cat"
+        Toast.makeText(this, "Ricerca in corso...", Toast.LENGTH_SHORT).show()
+
+        executor.execute {
+            val found = mutableListOf<FileItem>()
+            try { scanRecursive(File(rootInternal), found, cat, 0) } catch (_: Exception) {}
+            val sorted = when (sortBy) {
+                "size" -> found.sortedByDescending { it.size }
+                "date" -> found.sortedByDescending { it.lastModified }
+                else -> found.sortedBy { it.name.lowercase() }
+            }
+            mainHandler.post { displayedItems = sorted; renderList() }
+        }
+    }
+
+    private fun scanRecursive(dir: File, out: MutableList<FileItem>, cat: String, depth: Int) {
+        if (depth > 8) return
+        val dirName = dir.name
+        if (dirName == "Android" || dirName == ".trash" || dirName == ".thumbnails") return
         val files = dir.listFiles() ?: return
-        for (file in files) {
-            if (!showHidden && file.name.startsWith(".")) continue
-            val nameLower = file.name.lowercase()
-            val match = nameLower.contains(query)
-            if (file.isDirectory) {
-                if (match) {
-                    results.add(
-                        FileItem(
-                            file = file,
-                            name = file.name,
-                            path = file.absolutePath,
-                            isDirectory = true,
-                            size = 0L,
-                            lastModified = file.lastModified(),
-                            childrenCount = 0,
-                            searchParentPath = "Cartella"
-                        )
-                    )
-                }
-                searchRecursive(file, query, results, depth + 1)
-            } else if (match) {
-                results.add(
-                    FileItem(
-                        file = file,
-                        name = file.name,
-                        path = file.absolutePath,
-                        isDirectory = false,
-                        size = file.length(),
-                        lastModified = file.lastModified(),
-                        childrenCount = 0,
-                        searchParentPath = "File"
-                    )
-                )
+        for (f in files) {
+            val name = f.name
+            if (!showHidden && name.startsWith(".")) continue
+            if (f.isDirectory) scanRecursive(f, out, cat, depth + 1)
+            else {
+                val match = if (cat == "documents") isDocumentFile(name) else categoryFor(name) == cat
+                if (match) out.add(FileItem(f, name, f.absolutePath, false, f.length(), f.lastModified(), 0))
             }
         }
     }
 
-    private fun categoryFor(name: String): String? {
-        val lower = name.lowercase()
-        return when {
-            lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") || lower.endsWith(".gif") || lower.endsWith(".webp") -> "images"
-            lower.endsWith(".mp3") || lower.endsWith(".wav") || lower.endsWith(".ogg") || lower.endsWith(".flac") || lower.endsWith(".m4a") -> "audio"
-            lower.endsWith(".mp4") || lower.endsWith(".mkv") || lower.endsWith(".avi") || lower.endsWith(".mov") || lower.endsWith(".webm") -> "video"
-            lower.endsWith(".pdf") || lower.endsWith(".doc") || lower.endsWith(".docx") || lower.endsWith(".txt") || lower.endsWith(".xls") || lower.endsWith(".xlsx") || lower.endsWith(".ppt") || lower.endsWith(".pptx") -> "documents"
-            else -> null
+    private fun renderList() {
+        if (currentLayoutIsGrid != isGrid || recycler.layoutManager == null) {
+            val firstVisible = try {
+                when (val lm = recycler.layoutManager) {
+                    is GridLayoutManager -> lm.findFirstVisibleItemPosition()
+                    is LinearLayoutManager -> lm.findFirstVisibleItemPosition()
+                    else -> 0
+                }
+            } catch (_: Exception) { 0 }
+
+            recycler.layoutManager = if (isGrid) GridLayoutManager(this, 4) else LinearLayoutManager(this)
+            currentLayoutIsGrid = isGrid
+
+            fileAdapter = FileAdapter(
+                items = displayedItems, isGrid = isGrid, selectionMode = selectionMode,
+                selectedPaths = selectedPaths,
+                onClick = { item ->
+                    if (selectionMode) toggleSelection(item)
+                    else if (item.isDirectory) loadDirectory(item.path) else openFileWithDefault(item)
+                },
+                onLongClick = { item ->
+                    if (selectionMode) toggleSelection(item) else enterSelectionMode(item)
+                }
+            )
+            recycler.adapter = fileAdapter
+
+            if (firstVisible > 0 && displayedItems.isNotEmpty()) {
+                recycler.scrollToPosition(firstVisible)
+            }
+        } else {
+            fileAdapter?.updateItems(displayedItems, selectionMode)
         }
     }
 
-    private fun setCategory(cat: String) {
-        activeCategory = if (activeCategory == cat) null else cat
-        applyFilters()
+    private fun getCategoryKey(mimeType: String, fileName: String): String {
+        return when {
+            mimeType.startsWith("image/") -> "image"
+            mimeType.startsWith("video/") -> "video"
+            mimeType.startsWith("audio/") -> "audio"
+            else -> {
+                val ext = fileName.substringAfterLast('.', "").lowercase()
+                if (ext.isNotEmpty()) "ext_$ext" else "document"
+            }
+        }
     }
 
-    private fun goBack() {
-        val parent = File(currentPath).parentFile
-        if (parent != null) loadDirectory(parent.absolutePath)
+    private fun openFileWithDefault(item: FileItem) {
+        if (item.name.lowercase().endsWith(".apk")) { installApk(item); return }
+        val mimeType = getMimeType(item.name)
+        val categoryKey = getCategoryKey(mimeType, item.name)
+        val saved = prefs.getString("app_for_$categoryKey", null)
+        if (saved != null && tryOpenWithPackage(item, saved, mimeType)) return
+        showCustomAppPicker(item, mimeType, categoryKey)
+    }
+
+    private fun installApk(item: FileItem) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+                AlertDialog.Builder(this)
+                    .setTitle("Permesso richiesto")
+                    .setMessage("Per installare APK, devi autorizzare il File Manager.")
+                    .setPositiveButton("Apri impostazioni") { _, _ ->
+                        startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                            data = Uri.parse("package:$packageName")
+                        })
+                    }
+                    .setNegativeButton("Annulla", null)
+                    .show()
+                return
+            }
+            val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                clipData = ClipData.newRawUri("", uri)
+            }
+            for (ri in packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)) {
+                grantUriPermission(ri.activityInfo.packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun tryOpenWithPackage(item: FileItem, pkgName: String, mimeType: String): Boolean {
+        return try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                setPackage(pkgName)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                clipData = ClipData.newRawUri("", uri)
+            }
+            for (ri in packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)) {
+                grantUriPermission(ri.activityInfo.packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(intent); true
+        } catch (_: Exception) { false }
+    }
+
+    private fun showCustomAppPicker(item: FileItem, mimeType: String, categoryKey: String) {
+        try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
+            val probe = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val filtered = packageManager.queryIntentActivities(probe, 0)
+                .filter { it.activityInfo.packageName != packageName }
+
+            if (filtered.isEmpty()) {
+                Toast.makeText(this, "Nessuna app per aprire questo file", Toast.LENGTH_LONG).show(); return
+            }
+            if (filtered.size == 1) {
+                val app = filtered.first()
+                prefs.edit().putString("app_for_$categoryKey", app.activityInfo.packageName).apply()
+                openWithResolveInfo(item, app, uri, mimeType); return
+            }
+            val density = resources.displayMetrics.density
+            val adapter = object : BaseAdapter() {
+                override fun getCount() = filtered.size
+                override fun getItem(position: Int) = filtered[position]
+                override fun getItemId(position: Int) = position.toLong()
+                override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+                    val view = convertView ?: layoutInflater.inflate(android.R.layout.activity_list_item, parent, false)
+                    val app = filtered[position]
+                    val iconView = view.findViewById<ImageView>(android.R.id.icon)
+                    val textView = view.findViewById<TextView>(android.R.id.text1)
+                    val params = iconView.layoutParams
+                    params.width = (64 * density).toInt(); params.height = (64 * density).toInt()
+                    iconView.layoutParams = params
+                    iconView.setImageDrawable(app.loadIcon(packageManager))
+                    textView.text = app.loadLabel(packageManager).toString()
+                    textView.textSize = 20f
+                    textView.setPadding((20 * density).toInt(), (20 * density).toInt(), (20 * density).toInt(), (20 * density).toInt())
+                    return view
+                }
+            }
+            AlertDialog.Builder(this)
+                .setTitle("Apri con...")
+                .setAdapter(adapter) { _, which ->
+                    val app = filtered[which]
+                    prefs.edit().putString("app_for_$categoryKey", app.activityInfo.packageName).apply()
+                    openWithResolveInfo(item, app, uri, mimeType)
+                }
+                .setNegativeButton("Annulla", null)
+                .show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun openWithResolveInfo(item: FileItem, app: ResolveInfo, uri: Uri, mimeType: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                setComponent(ComponentName(app.activityInfo.packageName, app.activityInfo.name))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                clipData = ClipData.newRawUri("", uri)
+            }
+            for (ri in packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)) {
+                grantUriPermission(ri.activityInfo.packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun openFileWithPicker(item: FileItem) {
+        val mimeType = getMimeType(item.name)
+        val categoryKey = getCategoryKey(mimeType, item.name)
+        prefs.edit().remove("app_for_$categoryKey").apply()
+        showCustomAppPicker(item, mimeType, categoryKey)
+    }
+
+    private fun getMimeType(name: String): String {
+        val l = name.lowercase()
+        return when {
+            l.endsWith(".jpg") || l.endsWith(".jpeg") -> "image/jpeg"
+            l.endsWith(".png") -> "image/png"
+            l.endsWith(".gif") -> "image/gif"
+            l.endsWith(".webp") -> "image/webp"
+            l.endsWith(".bmp") -> "image/bmp"
+            l.endsWith(".mp3") -> "audio/mpeg"
+            l.endsWith(".wav") -> "audio/wav"
+            l.endsWith(".ogg") -> "audio/ogg"
+            l.endsWith(".m4a") -> "audio/mp4"
+            l.endsWith(".mp4") -> "video/mp4"
+            l.endsWith(".mkv") -> "video/x-matroska"
+            l.endsWith(".avi") -> "video/x-msvideo"
+            l.endsWith(".mov") -> "video/quicktime"
+            l.endsWith(".webm") -> "video/webm"
+            l.endsWith(".pdf") -> "application/pdf"
+            l.endsWith(".zip") -> "application/zip"
+            l.endsWith(".rar") -> "application/x-rar-compressed"
+            l.endsWith(".txt") -> "text/plain"
+            l.endsWith(".html") || l.endsWith(".htm") -> "text/html"
+            l.endsWith(".json") -> "application/json"
+            l.endsWith(".xml") -> "text/xml"
+            l.endsWith(".doc") -> "application/msword"
+            l.endsWith(".docx") -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            l.endsWith(".xls") -> "application/vnd.ms-excel"
+            l.endsWith(".xlsx") -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            l.endsWith(".ppt") -> "application/vnd.ms-powerpoint"
+            l.endsWith(".pptx") -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            l.endsWith(".apk") -> "application/vnd.android.package-archive"
+            else -> "*/*"
+        }
+    }
+
+    private fun shareFile(item: FileItem) {
+        try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = getMimeType(item.name)
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                clipData = ClipData.newRawUri("", uri)
+            }
+            startActivity(Intent.createChooser(intent, "Condividi con..."))
+        } catch (e: Exception) {
+            Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun renameItem(item: FileItem) {
+        val input = EditText(this)
+        input.setText(item.name)
+        AlertDialog.Builder(this)
+            .setTitle("Rinomina")
+            .setView(input)
+            .setPositiveButton("OK") { _, _ ->
+                val newName = input.text.toString().trim()
+                if (newName.isEmpty() || newName == item.name) return@setPositiveButton
+                try {
+                    val newFile = File(item.file.parentFile, newName)
+                    if (item.file.renameTo(newFile)) {
+                        updateInMediaStore(item.path, newFile.absolutePath)
+                        scanPath(newFile.absolutePath)
+                        Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
+                        loadDirectory(currentPath)
+                        return@setPositiveButton
+                    }
+                } catch (_: Exception) {}
+                requestSaf {
+                    val doc = getSafDocumentFile(item.path)
+                    if (doc != null && doc.renameTo(newName)) {
+                        Toast.makeText(this, "Rinominato (SAF)", Toast.LENGTH_SHORT).show()
+                        loadDirectory(currentPath)
+                    } else Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Annulla", null)
+            .show()
+    }
+
+    private fun updateInMediaStore(oldPath: String, newPath: String) {
+        try {
+            if (File(newPath).isDirectory) return
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DATA, newPath)
+                put(MediaStore.MediaColumns.DISPLAY_NAME, File(newPath).name)
+                put(MediaStore.MediaColumns.TITLE, File(newPath).name)
+            }
+            contentResolver.update(getMediaStoreUri(oldPath), values, "${MediaStore.MediaColumns.DATA} = ?", arrayOf(oldPath))
+        } catch (_: Exception) {}
+    }
+
+    private fun getMediaStoreUri(path: String): Uri {
+        val l = path.lowercase()
+        return when {
+            l.endsWith(".jpg") || l.endsWith(".jpeg") || l.endsWith(".png") ||
+            l.endsWith(".gif") || l.endsWith(".webp") -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            l.endsWith(".mp4") || l.endsWith(".mkv") || l.endsWith(".avi") ||
+            l.endsWith(".mov") || l.endsWith(".webm") -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            l.endsWith(".mp3") || l.endsWith(".wav") || l.endsWith(".ogg") ||
+            l.endsWith(".flac") || l.endsWith(".m4a") -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+            else -> MediaStore.Files.getContentUri("external")
+        }
+    }
+
+    private fun scanPath(path: String) {
+        scanPaths(listOf(path))
+    }
+
+    private fun scanPaths(paths: List<String>) {
+        if (paths.isEmpty()) return
+        try {
+            MediaScannerConnection.scanFile(this, paths.toTypedArray(), null, null)
+        } catch (_: Exception) {}
+    }
+
+    private fun showItemInfo(item: FileItem) {
+        val info = buildString {
+            append("Percorso: ${item.path}\n")
+            if (!item.isDirectory) append("Dimensione: ${formatSize(item.size)}\n")
+            append("Modificato: ${java.util.Date(item.lastModified)}")
+        }
+        AlertDialog.Builder(this)
+            .setTitle(item.name)
+            .setMessage(info)
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    private fun createFolder() {
+        val input = EditText(this)
+        input.hint = "Nome cartella"
+        AlertDialog.Builder(this)
+            .setTitle("Nuova cartella")
+            .setView(input)
+            .setPositiveButton("Crea") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isEmpty()) return@setPositiveButton
+                try {
+                    val newDir = File(currentPath, name)
+                    if (newDir.mkdir()) {
+                        scanPath(newDir.absolutePath)
+                        Toast.makeText(this, "Cartella creata", Toast.LENGTH_SHORT).show()
+                        loadDirectory(currentPath)
+                        return@setPositiveButton
+                    }
+                } catch (_: Exception) {}
+                requestSaf {
+                    val parent = getSafDocumentFile(currentPath)
+                    if (parent != null && parent.createDirectory(name) != null) {
+                        Toast.makeText(this, "Cartella creata (SAF)", Toast.LENGTH_SHORT).show()
+                        loadDirectory(currentPath)
+                    } else Toast.makeText(this, "Impossibile creare", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Annulla", null)
+            .show()
+    }
+
+    private fun showSortDialog() {
+        val options = arrayOf("Nome", "Dimensione", "Data")
+        val current = when (sortBy) { "size" -> 1; "date" -> 2; else -> 0 }
+        AlertDialog.Builder(this)
+            .setTitle("Ordina per")
+            .setSingleChoiceItems(options, current) { dialog, which ->
+                sortBy = when (which) { 1 -> "size"; 2 -> "date"; else -> "name" }
+                prefs.edit().putString("sort_by", sortBy).apply()
+                updateSortLabel()
+                applyFilters()
+                dialog.dismiss()
+            }
+            .show()
+    }
+
+    private fun updateSortLabel() {
+        val label = when (sortBy) { "size" -> "Dimensione"; "date" -> "Data"; else -> "Nome" }
+        txtSort.text = "Ordina per $label"
     }
 
     private fun toggleView() {
@@ -1275,27 +1623,60 @@ class MainActivity : AppCompatActivity() {
         renderList()
     }
 
-    private fun showSettingsDialog() {}
-    private fun showSortDialog() {}
-    private fun updateSortLabel() {}
-    private fun hasStoragePermission(): Boolean = true
-    private fun requestStoragePermission() {}
-    private fun openFileWithDefault(item: FileItem) {}
-    private fun openFileWithPicker(item: FileItem) {}
-    private fun renameItem(item: FileItem) {}
-    private fun shareFile(item: FileItem) {}
-    private fun createFolder() {}
-    private fun scanPath(path: String) {}
-    private fun scanPaths(paths: List<String>) {}
-    private fun getMimeType(name: String): String = "*/*"
-    private fun updateInMediaStore(oldPath: String, newPath: String) {}
-    private fun getMediaStoreUri(path: String): Uri = Uri.EMPTY
-    private fun showItemInfo(item: FileItem) {}
-}
+    private fun showSettingsDialog() {
+        val options = mutableListOf<String>()
+        options.add("🔄  Aggiorna cartella")
+        options.add(if (showHidden) "🙈  Nascondi file nascosti" else "👁  Mostra file nascosti")
+        options.add("🔑  Rinnova permesso scrittura")
 
-class StorageVolumeInfo(
-    val label: String,
-    val path: String,
-    val usedBytes: Long,
-    val totalBytes: Long
-)
+        AlertDialog.Builder(this)
+            .setTitle("Impostazioni")
+            .setItems(options.toTypedArray()) { _, which ->
+                when (which) {
+                    0 -> { Toast.makeText(this, "Aggiornamento...", Toast.LENGTH_SHORT).show(); loadDirectory(currentPath) }
+                    1 -> {
+                        showHidden = !showHidden
+                        prefs.edit().putBoolean("show_hidden", showHidden).apply()
+                        loadDirectory(currentPath)
+                    }
+                    2 -> {
+                        safTreeUri = null
+                        prefs.edit().remove("saf_tree_uri").apply()
+                        requestSaf { Toast.makeText(this, "Permesso rinnovato", Toast.LENGTH_SHORT).show() }
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun formatSize(bytes: Long): String {
+        if (bytes < 1024) return "$bytes B"
+        val kb = bytes / 1024.0
+        if (kb < 1024) return String.format("%.1f KB", kb)
+        val mb = kb / 1024.0
+        if (mb < 1024) return String.format("%.1f MB", mb)
+        return String.format("%.1f GB", mb / 1024.0)
+    }
+
+    private fun goBack() {
+        if (selectionMode) { exitSelectionMode(); return }
+        if (currentPath == rootInternal) return
+        val parent = File(currentPath).parent
+        if (parent != null && parent.startsWith(rootInternal)) loadDirectory(parent)
+        else if (currentPath.startsWith("/storage/") || currentPath.startsWith("/mnt/"))
+            loadDirectory(rootInternal, resetCategory = true)
+    }
+
+    override fun onBackPressed() {
+        if (selectionMode) exitSelectionMode()
+        else if (currentPath != rootInternal) goBack()
+        else super.onBackPressed()
+    }
+
+    data class StorageVolumeInfo(
+        val label: String,
+        val path: String,
+        val usedBytes: Long,
+        val totalBytes: Long
+    )
+}
