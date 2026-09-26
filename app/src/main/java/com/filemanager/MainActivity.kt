@@ -1287,7 +1287,10 @@ class MainActivity : AppCompatActivity() {
     private fun createFolder() {}
     private fun scanPath(path: String) {}
     private fun scanPaths(paths: List<String>) {}
+    private fun getMimeType(name: String): String = "*/*"
+    private fun updateInMediaStore(oldPath: String, newPath: String) {}
     private fun getMediaStoreUri(path: String): Uri = Uri.EMPTY
+    private fun showItemInfo(item: FileItem) {}
 }
 
 class StorageVolumeInfo(
@@ -1296,4 +1299,3 @@ class StorageVolumeInfo(
     val usedBytes: Long,
     val totalBytes: Long
 )
-
