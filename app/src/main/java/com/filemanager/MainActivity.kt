@@ -255,7 +255,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- ELIMINA SELEZIONATI (con API native) ----------
+    // ---------- ELIMINA SELEZIONATI ----------
 
     private fun deleteSelectedFiles() {
         if (selectedPaths.isEmpty()) return
@@ -277,7 +277,6 @@ class MainActivity : AppCompatActivity() {
                             val f = File(path)
                             var ok = false
 
-                            // Tentativo 1: Files.deleteIfExists() nativo
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                                 try {
                                     if (f.isDirectory) {
@@ -294,12 +293,10 @@ class MainActivity : AppCompatActivity() {
                                 } catch (_: Exception) {}
                             }
 
-                            // Tentativo 2: File.delete() classico
                             if (!ok) {
                                 ok = if (f.isDirectory) deleteRecursively(f) else f.delete()
                             }
 
-                            // Tentativo 3: SAF (fallback)
                             if (!ok) {
                                 val doc = getSafDocumentFile(path)
                                 if (doc != null) {
@@ -498,7 +495,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COMPRIMI MULTI (con fallback SAF) ----------
+    // ---------- COMPRIMI MULTI ----------
 
     private fun comprimiZipSelezioneMultipla() {
         if (selectedPaths.isEmpty()) return
@@ -1423,7 +1420,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COMPRIMI SINGOLO (con fallback SAF) ----------
+    // ---------- COMPRIMI SINGOLO ----------
 
     private fun comprimiZip(item: FileItem) {
         val zipName = if (item.isDirectory) "${item.name}.zip" else item.name.substringBeforeLast(".") + ".zip"
@@ -1690,7 +1687,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COPIA/INCOLLA (con API native veloci) ----------
+    // ---------- COPIA/INCOLLA (FIX: scanPath UNA SOLA VOLTA) ----------
 
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
@@ -1740,7 +1737,7 @@ class MainActivity : AppCompatActivity() {
 
                 var ok = false
 
-                // === TENTATIVO 1: se taglia, prova Files.move() (istantaneo) ===
+                // TENTATIVO 1: se taglia, prova Files.move() (istantaneo)
                 if (isCut) {
                     try {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -1750,19 +1747,16 @@ class MainActivity : AppCompatActivity() {
                                 java.nio.file.StandardCopyOption.REPLACE_EXISTING
                             )
                             ok = true
-                            scanPath(dst.absolutePath)
                         } else {
                             if (src.renameTo(dst)) {
                                 ok = true
-                                scanPath(dst.absolutePath)
                             }
                         }
                     } catch (_: Exception) {}
                 }
-                // ==================================================================
 
                 if (!ok) {
-                    // Tentativo 2: copia veloce con FileChannel.transferTo()
+                    // TENTATIVO 2: copia veloce File
                     if (hasStoragePermission()) {
                         try {
                             if (src.isDirectory) {
@@ -1776,7 +1770,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
-                    // Tentativo 3: SAF (fallback)
+                    // TENTATIVO 3: SAF
                     if (!ok) {
                         try {
                             ok = copyViaSaf(src, dst)
@@ -1786,9 +1780,7 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     if (ok) {
-                        scanPath(dst.absolutePath)
-
-                        // Se "cut", elimina l'originale con API native
+                        // Se "cut", elimina l'originale
                         if (isCut && dst.absolutePath != src.absolutePath) {
                             try {
                                 var delOk = false
@@ -1818,14 +1810,13 @@ class MainActivity : AppCompatActivity() {
                                         delOk = if (doc.isDirectory) deleteDocumentRecursive(doc) else doc.delete()
                                     }
                                 }
-
-                                if (delOk) scanPath(src.absolutePath)
                             } catch (_: Exception) {}
                         }
                     }
                 }
 
                 if (ok) copied++
+                // NIENTE scanPath() QUI!
             }
 
             val finalCopied = copied
@@ -1833,6 +1824,9 @@ class MainActivity : AppCompatActivity() {
 
             mainHandler.post {
                 if (finalCopied > 0) {
+                    // UNA SOLA scansione alla fine
+                    scanPath(dstDir.absolutePath)
+
                     Toast.makeText(
                         this,
                         if (isCut) "Spostati $finalCopied file" else "Copiati $finalCopied file",
@@ -1929,7 +1923,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // === COPIA VELOCE con FileChannel.transferTo() (zero-copy) ===
     private fun copyFile(src: File, dst: File) {
         try {
             FileInputStream(src).use { input ->
@@ -1947,7 +1940,6 @@ class MainActivity : AppCompatActivity() {
             }
             dst.setLastModified(src.lastModified())
         } catch (e: Exception) {
-            // Fallback classico se transferTo fallisce
             FileInputStream(src).use { input ->
                 FileOutputStream(dst).use { output ->
                     val buffer = ByteArray(256 * 1024)
