@@ -255,7 +255,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- ELIMINA SELEZIONATI (con fallback SAF) ----------
+    // ---------- ELIMINA SELEZIONATI (con API native) ----------
 
     private fun deleteSelectedFiles() {
         if (selectedPaths.isEmpty()) return
@@ -275,9 +275,31 @@ class MainActivity : AppCompatActivity() {
                     for (path in pathsToDelete) {
                         try {
                             val f = File(path)
+                            var ok = false
 
-                            var ok = if (f.isDirectory) deleteRecursively(f) else f.delete()
+                            // Tentativo 1: Files.deleteIfExists() nativo
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                try {
+                                    if (f.isDirectory) {
+                                        java.nio.file.Files.walk(f.toPath()).use { stream ->
+                                            stream.sorted(Comparator.reverseOrder())
+                                                .forEach { p ->
+                                                    try { java.nio.file.Files.deleteIfExists(p) } catch (_: Exception) {}
+                                                }
+                                        }
+                                        ok = !f.exists()
+                                    } else {
+                                        ok = java.nio.file.Files.deleteIfExists(f.toPath())
+                                    }
+                                } catch (_: Exception) {}
+                            }
 
+                            // Tentativo 2: File.delete() classico
+                            if (!ok) {
+                                ok = if (f.isDirectory) deleteRecursively(f) else f.delete()
+                            }
+
+                            // Tentativo 3: SAF (fallback)
                             if (!ok) {
                                 val doc = getSafDocumentFile(path)
                                 if (doc != null) {
@@ -287,10 +309,7 @@ class MainActivity : AppCompatActivity() {
                                 }
                             }
 
-                            if (ok) {
-                                deleted++
-                                scanPath(path)
-                            }
+                            if (ok) deleted++
                         } catch (_: Exception) {}
                     }
 
@@ -1671,7 +1690,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COPIA/INCOLLA (con renameTo per taglia) ----------
+    // ---------- COPIA/INCOLLA (con API native veloci) ----------
 
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
@@ -1721,19 +1740,29 @@ class MainActivity : AppCompatActivity() {
 
                 var ok = false
 
-                // === OTTIMIZZAZIONE: se è "taglia" e stessa partizione, usa renameTo ===
+                // === TENTATIVO 1: se taglia, prova Files.move() (istantaneo) ===
                 if (isCut) {
                     try {
-                        if (src.renameTo(dst)) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            java.nio.file.Files.move(
+                                src.toPath(),
+                                dst.toPath(),
+                                java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                            )
                             ok = true
                             scanPath(dst.absolutePath)
+                        } else {
+                            if (src.renameTo(dst)) {
+                                ok = true
+                                scanPath(dst.absolutePath)
+                            }
                         }
                     } catch (_: Exception) {}
                 }
-                // =========================================================================
+                // ==================================================================
 
                 if (!ok) {
-                    // Tentativo 1: File diretto (VELOCE se hai MANAGE_EXTERNAL_STORAGE)
+                    // Tentativo 2: copia veloce con FileChannel.transferTo()
                     if (hasStoragePermission()) {
                         try {
                             if (src.isDirectory) {
@@ -1747,7 +1776,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
-                    // Tentativo 2: SAF (fallback, più lento)
+                    // Tentativo 3: SAF (fallback)
                     if (!ok) {
                         try {
                             ok = copyViaSaf(src, dst)
@@ -1759,16 +1788,37 @@ class MainActivity : AppCompatActivity() {
                     if (ok) {
                         scanPath(dst.absolutePath)
 
-                        // Se "cut", elimina l'originale (con fallback SAF)
+                        // Se "cut", elimina l'originale con API native
                         if (isCut && dst.absolutePath != src.absolutePath) {
                             try {
-                                var delOk = if (src.isDirectory) src.deleteRecursively() else src.delete()
+                                var delOk = false
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    try {
+                                        if (src.isDirectory) {
+                                            java.nio.file.Files.walk(src.toPath()).use { stream ->
+                                                stream.sorted(Comparator.reverseOrder())
+                                                    .forEach { p ->
+                                                        try { java.nio.file.Files.deleteIfExists(p) } catch (_: Exception) {}
+                                                    }
+                                            }
+                                            delOk = !src.exists()
+                                        } else {
+                                            delOk = java.nio.file.Files.deleteIfExists(src.toPath())
+                                        }
+                                    } catch (_: Exception) {}
+                                }
+
+                                if (!delOk) {
+                                    delOk = if (src.isDirectory) deleteRecursively(src) else src.delete()
+                                }
+
                                 if (!delOk) {
                                     val doc = getSafDocumentFile(src.absolutePath)
                                     if (doc != null) {
                                         delOk = if (doc.isDirectory) deleteDocumentRecursive(doc) else doc.delete()
                                     }
                                 }
+
                                 if (delOk) scanPath(src.absolutePath)
                             } catch (_: Exception) {}
                         }
@@ -1879,18 +1929,37 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // === COPIA VELOCE con FileChannel.transferTo() (zero-copy) ===
     private fun copyFile(src: File, dst: File) {
-        FileInputStream(src).use { input ->
-            FileOutputStream(dst).use { output ->
-                val buffer = ByteArray(256 * 1024)
-                var length: Int
-                while (input.read(buffer).also { length = it } > 0) {
-                    output.write(buffer, 0, length)
+        try {
+            FileInputStream(src).use { input ->
+                FileOutputStream(dst).use { output ->
+                    val inputChannel = input.channel
+                    val outputChannel = output.channel
+                    var position = 0L
+                    val size = inputChannel.size()
+
+                    while (position < size) {
+                        position += inputChannel.transferTo(position, size - position, outputChannel)
+                    }
+                    outputChannel.force(false)
                 }
-                output.flush()
             }
+            dst.setLastModified(src.lastModified())
+        } catch (e: Exception) {
+            // Fallback classico se transferTo fallisce
+            FileInputStream(src).use { input ->
+                FileOutputStream(dst).use { output ->
+                    val buffer = ByteArray(256 * 1024)
+                    var length: Int
+                    while (input.read(buffer).also { length = it } > 0) {
+                        output.write(buffer, 0, length)
+                    }
+                    output.flush()
+                }
+            }
+            dst.setLastModified(src.lastModified())
         }
-        dst.setLastModified(src.lastModified())
     }
 
     private fun copyDirectoryRecursive(src: File, dst: File) {
