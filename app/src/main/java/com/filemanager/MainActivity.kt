@@ -170,18 +170,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onResume() {
-        super.onResume()
-        if (hasStoragePermission()) {
-            loadDirectory(currentPath)
-        }
-        updateStorageCards()
-        updatePasteButton()
-    }
+    super.onResume()
+    if (hasStoragePermission()) {
+        loadDirectory(currentPath)
 
-    override fun onDestroy() {
-        super.onDestroy()
-        executor.shutdown()
+        if (safTreeUri == null && !prefs.getBoolean("saf_requested", false)) {
+            prefs.edit().putBoolean("saf_requested", true).apply()
+            requestSaf {
+                Toast.makeText(this, "Permesso completo concesso", Toast.LENGTH_SHORT).show()
+                updateStorageCards()
+                loadDirectory(currentPath)
+            }
+        }
     }
+    updateStorageCards()
+    updatePasteButton()
+}
 
     // ---------- ICONA TOGGLE VISTA ----------
 
