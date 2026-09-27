@@ -254,126 +254,218 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // === ELIMINA — File diretto, SAF solo se File fallisce ===
+    // === COPIA (metti negli appunti) ===
     // ============================================================
-  private fun pasteFromClipboard() {
-    if (clipboardPaths.isEmpty()) {
-        Toast.makeText(this, "Niente negli appunti", Toast.LENGTH_SHORT).show()
-        return
-    }
-
-    val srcPaths = clipboardPaths.toList()
-    val action = clipboardAction
-    val dstDir = File(currentPath)
-
-    val existingSrc = srcPaths.filter { File(it).exists() }
-    if (existingSrc.isEmpty()) {
-        AlertDialog.Builder(this)
-            .setTitle("Errore Incolla")
-            .setMessage("Nessun file originale trovato")
-            .setPositiveButton("OK", null)
-            .show()
+    private fun copySelectedFiles(action: String) {
+        if (selectedPaths.isEmpty()) return
         clipboardPaths.clear()
-        clipboardAction = null
-        exitSelectionMode()
-        updatePasteButton()
-        return
+        clipboardPaths.addAll(selectedPaths)
+        clipboardAction = action
+        Toast.makeText(
+            this,
+            "${selectedPaths.size} file ${if (action == "cut") "tagliati" else "copiati"}",
+            Toast.LENGTH_SHORT
+        ).show()
+        updateSelectionUI()
     }
 
-    Toast.makeText(
-        this,
-        if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
-        Toast.LENGTH_SHORT
-    ).show()
+    // ============================================================
+    // === ELIMINA ===
+    // ============================================================
+    private fun deleteSelectedFiles() {
+        if (selectedPaths.isEmpty()) return
 
-    executor.execute {
-        var copied = 0
-        var errorMsg = ""
-        val copiedPaths = ArrayList<String>()
+        val count = selectedPaths.size
+        val pathAtStart = currentPath
 
-        for (srcPath in existingSrc) {
-            val src = File(srcPath)
+        AlertDialog.Builder(this)
+            .setTitle("Elimina")
+            .setMessage("Eliminare $count file?")
+            .setPositiveButton("Elimina") { _, _ ->
+                val pathsToDelete = selectedPaths.toList()
+                Toast.makeText(this, "Eliminazione in corso...", Toast.LENGTH_SHORT).show()
 
-            var dstName = src.name
-            var dst = File(dstDir, dstName)
+                executor.execute {
+                    var deleted = 0
+                    for (path in pathsToDelete) {
+                        try {
+                            val f = File(path)
 
-            if (dst.absolutePath == src.absolutePath || dst.exists()) {
-                dstName = generateUniqueName(dstDir, src.name)
-                dst = File(dstDir, dstName)
-            }
+                            // 1) File diretto
+                            var ok = if (f.isDirectory) deleteRecursively(f) else f.delete()
 
-            var ok = false
-            var renamed = false
+                            // 2) SAF solo se File fallisce
+                            if (!ok) {
+                                val doc = getSafDocumentFile(path)
+                                if (doc != null) {
+                                    ok = try {
+                                        if (doc.isDirectory) deleteDocumentRecursive(doc) else doc.delete()
+                                    } catch (_: Exception) { false }
+                                }
+                            }
 
-            // 1) File diretto
-            try {
-                if (action == "cut") {
-                    renamed = src.renameTo(dst)
-                    ok = renamed
-                    // ⚠️ Verifica REALE: se renameTo mente, dst non esiste
-                    if (ok && !dst.exists()) {
-                        renamed = false
-                        ok = false
+                            if (ok) deleted++
+                        } catch (_: Exception) {}
+                    }
+
+                    val finalDeleted = deleted
+                    mainHandler.post {
+                        Toast.makeText(this, "Eliminati $finalDeleted file", Toast.LENGTH_SHORT).show()
+                        exitSelectionMode()
+                        loadDirectory(pathAtStart)
                     }
                 }
-                if (!ok) {
-                    if (src.isDirectory) copyDirectoryRecursive(src, dst)
-                    else copyFile(src, dst)
-                    // ⚠️ Verifica REALE che la copia sia avvenuta
-                    ok = dst.exists()
-                }
-            } catch (e: Exception) {
-                errorMsg += "\n${src.name}: ${e.message}"
-                ok = false
             }
+            .setNegativeButton("Annulla", null)
+            .show()
+    }
 
-            // 2) SAF solo se File fallisce
-            if (!ok) {
-                try { ok = copyViaSaf(src, dst) } catch (_: Exception) {}
-            }
-
-            if (ok) {
-                copied++
-                copiedPaths.add(dst.absolutePath)
-
-                // Se è un "cut" e renameTo NON ha funzionato (perché mente su Huawei),
-                // ora cancella l'originale
-                if (action == "cut" && !renamed && dst.absolutePath != src.absolutePath && src.exists()) {
-                    try {
-                        if (src.isDirectory) deleteRecursively(src) else src.delete()
-                    } catch (_: Exception) {}
+    private fun deleteRecursively(file: File): Boolean {
+        if (file.isDirectory) {
+            val children = file.listFiles()
+            if (children != null) {
+                for (child in children) {
+                    deleteRecursively(child)
                 }
             }
         }
+        return try {
+            file.delete()
+        } catch (_: Exception) {
+            false
+        }
+    }
 
-        scanPaths(copiedPaths)
+    private fun deleteDocumentRecursive(doc: DocumentFile): Boolean {
+        if (doc.isDirectory) {
+            for (child in doc.listFiles()) {
+                deleteDocumentRecursive(child)
+            }
+        }
+        return doc.delete()
+    }
 
-        val finalCopied = copied
-        val finalErr = errorMsg
-        val wasCut = action == "cut"
+    // ============================================================
+    // === COPIA/INCOLLA — File prima, SAF solo come fallback ===
+    // ============================================================
+    private fun pasteFromClipboard() {
+        if (clipboardPaths.isEmpty()) {
+            Toast.makeText(this, "Niente negli appunti", Toast.LENGTH_SHORT).show()
+            return
+        }
 
-        mainHandler.post {
-            if (finalCopied > 0) {
-                Toast.makeText(
-                    this,
-                    if (wasCut) "Spostati $finalCopied file" else "Copiati $finalCopied file",
-                    Toast.LENGTH_SHORT
-                ).show()
-                clipboardPaths.clear()
-                clipboardAction = null
-                exitSelectionMode()
-                updatePasteButton()
-                loadDirectory(currentPath)
-            } else {
-                AlertDialog.Builder(this)
-                    .setTitle("Errore Incolla")
-                    .setMessage("Nessun file copiato.\n$finalErr")
-                    .setPositiveButton("OK", null)
-                    .show()
+        val srcPaths = clipboardPaths.toList()
+        val action = clipboardAction
+        val dstDir = File(currentPath)
+
+        val existingSrc = srcPaths.filter { File(it).exists() }
+        if (existingSrc.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("Errore Incolla")
+                .setMessage("Nessun file originale trovato")
+                .setPositiveButton("OK", null)
+                .show()
+            clipboardPaths.clear()
+            clipboardAction = null
+            exitSelectionMode()
+            updatePasteButton()
+            return
+        }
+
+        Toast.makeText(
+            this,
+            if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
+            Toast.LENGTH_SHORT
+        ).show()
+
+        executor.execute {
+            var copied = 0
+            var errorMsg = ""
+            val copiedPaths = ArrayList<String>()
+
+            for (srcPath in existingSrc) {
+                val src = File(srcPath)
+
+                var dstName = src.name
+                var dst = File(dstDir, dstName)
+
+                if (dst.absolutePath == src.absolutePath || dst.exists()) {
+                    dstName = generateUniqueName(dstDir, src.name)
+                    dst = File(dstDir, dstName)
+                }
+
+                var ok = false
+                var renamed = false
+
+                // 1) File diretto
+                try {
+                    if (action == "cut") {
+                        renamed = src.renameTo(dst)
+                        ok = renamed
+                        // Verifica reale: se renameTo mente, dst non esiste
+                        if (ok && !dst.exists()) {
+                            renamed = false
+                            ok = false
+                        }
+                    }
+                    if (!ok) {
+                        if (src.isDirectory) copyDirectoryRecursive(src, dst)
+                        else copyFile(src, dst)
+                        // Verifica reale che la copia sia avvenuta
+                        ok = dst.exists()
+                    }
+                } catch (e: Exception) {
+                    errorMsg += "\n${src.name}: ${e.message}"
+                    ok = false
+                }
+
+                // 2) SAF solo se File fallisce
+                if (!ok) {
+                    try { ok = copyViaSaf(src, dst) } catch (_: Exception) {}
+                }
+
+                if (ok) {
+                    copied++
+                    copiedPaths.add(dst.absolutePath)
+
+                    // Se è un "cut" e renameTo NON ha funzionato, ora cancella l'originale
+                    if (action == "cut" && !renamed && dst.absolutePath != src.absolutePath && src.exists()) {
+                        try {
+                            if (src.isDirectory) deleteRecursively(src) else src.delete()
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+
+            scanPaths(copiedPaths)
+
+            val finalCopied = copied
+            val finalErr = errorMsg
+            val wasCut = action == "cut"
+
+            mainHandler.post {
+                if (finalCopied > 0) {
+                    Toast.makeText(
+                        this,
+                        if (wasCut) "Spostati $finalCopied file" else "Copiati $finalCopied file",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    clipboardPaths.clear()
+                    clipboardAction = null
+                    exitSelectionMode()
+                    updatePasteButton()
+                    loadDirectory(currentPath)
+                } else {
+                    AlertDialog.Builder(this)
+                        .setTitle("Errore Incolla")
+                        .setMessage("Nessun file copiato.\n$finalErr")
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
             }
         }
     }
-}
+
     private fun generateUniqueName(dir: File, originalName: String): String {
         val dotIndex = originalName.lastIndexOf('.')
         val baseName: String
@@ -479,84 +571,87 @@ class MainActivity : AppCompatActivity() {
         return allOk
     }
 
+    // ============================================================
+    // === MENU ⋮ DELLA SELEZIONE ===
+    // ============================================================
     private fun showSelectionMoreMenu() {
-    if (selectedPaths.isEmpty()) return
+        if (selectedPaths.isEmpty()) return
 
-    val popup = PopupMenu(this, btnSelMore)
-    val count = selectedPaths.size
+        val popup = PopupMenu(this, btnSelMore)
+        val count = selectedPaths.size
 
-    val allVisibleSelected = displayedItems.isNotEmpty() &&
-            displayedItems.all { selectedPaths.contains(it.path) }
+        val allVisibleSelected = displayedItems.isNotEmpty() &&
+                displayedItems.all { selectedPaths.contains(it.path) }
 
-    if (allVisibleSelected) {
-        popup.menu.add(0, 20, 0, "Deseleziona tutto")
-    } else {
-        popup.menu.add(0, 20, 0, "Seleziona tutto")
-    }
-
-    if (count == 1) {
-        val item = getSingleSelectedItem()
-        if (item != null && !item.isDirectory) {
-            popup.menu.add(0, 10, 1, "Apri")
-            popup.menu.add(0, 11, 2, "Apri con...")
+        if (allVisibleSelected) {
+            popup.menu.add(0, 20, 0, "Deseleziona tutto")
+        } else {
+            popup.menu.add(0, 20, 0, "Seleziona tutto")
         }
-    }
 
-    popup.menu.add(0, 1, 3, "Taglia")
-    popup.menu.add(0, 2, 4, "Condividi")
-    popup.menu.add(0, 3, 5, "Comprimi in ZIP")
-
-    if (count == 1) {
-        val path = selectedPaths.first()
-        val item = allItems.find { it.path == path }
-        if (item != null) {
-            popup.menu.add(0, 4, 6, "Rinomina")
-            if (!item.isDirectory && item.name.lowercase().endsWith(".zip")) {
-                popup.menu.add(0, 5, 7, "Decomprimi")
+        if (count == 1) {
+            val item = getSingleSelectedItem()
+            if (item != null && !item.isDirectory) {
+                popup.menu.add(0, 10, 1, "Apri")
+                popup.menu.add(0, 11, 2, "Apri con...")
             }
-            popup.menu.add(0, 6, 8, "Proprietà")
         }
-    }
 
-    popup.setOnMenuItemClickListener { menuItem ->
-        when (menuItem.itemId) {
-            20 -> {
-                if (allVisibleSelected) selectedPaths.clear()
-                else {
-                    selectedPaths.clear()
-                    for (item in displayedItems) selectedPaths.add(item.path)
+        popup.menu.add(0, 1, 3, "Taglia")
+        popup.menu.add(0, 2, 4, "Condividi")
+        popup.menu.add(0, 3, 5, "Comprimi in ZIP")
+
+        if (count == 1) {
+            val path = selectedPaths.first()
+            val item = allItems.find { it.path == path }
+            if (item != null) {
+                popup.menu.add(0, 4, 6, "Rinomina")
+                if (!item.isDirectory && item.name.lowercase().endsWith(".zip")) {
+                    popup.menu.add(0, 5, 7, "Decomprimi")
                 }
-                updateSelectionUI()
-                renderList()
-            }
-            10 -> {
-                val item = getSingleSelectedItem()
-                if (item != null) { exitSelectionMode(); openFileWithDefault(item) }
-            }
-            11 -> {
-                val item = getSingleSelectedItem()
-                if (item != null) { exitSelectionMode(); openFileWithPicker(item) }
-            }
-            1 -> copySelectedFiles("cut")
-            2 -> shareSelectedFiles()
-            3 -> comprimiZipSelezioneMultipla()
-            4 -> {
-                val item = getSingleSelectedItem()
-                if (item != null) { exitSelectionMode(); renameItem(item) }
-            }
-            5 -> {
-                val item = getSingleSelectedItem()
-                if (item != null) { exitSelectionMode(); decomprimiZip(item) }
-            }
-            6 -> {
-                val item = getSingleSelectedItem()
-                if (item != null) { exitSelectionMode(); showItemInfo(item) }
+                popup.menu.add(0, 6, 8, "Proprietà")
             }
         }
-        true
+
+        popup.setOnMenuItemClickListener { menuItem ->
+            when (menuItem.itemId) {
+                20 -> {
+                    if (allVisibleSelected) selectedPaths.clear()
+                    else {
+                        selectedPaths.clear()
+                        for (item in displayedItems) selectedPaths.add(item.path)
+                    }
+                    updateSelectionUI()
+                    renderList()
+                }
+                10 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) { exitSelectionMode(); openFileWithDefault(item) }
+                }
+                11 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) { exitSelectionMode(); openFileWithPicker(item) }
+                }
+                1 -> copySelectedFiles("cut")
+                2 -> shareSelectedFiles()
+                3 -> comprimiZipSelezioneMultipla()
+                4 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) { exitSelectionMode(); renameItem(item) }
+                }
+                5 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) { exitSelectionMode(); decomprimiZip(item) }
+                }
+                6 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) { exitSelectionMode(); showItemInfo(item) }
+                }
+            }
+            true
+        }
+        popup.show()
     }
-    popup.show()
-}
 
     private fun getSingleSelectedItem(): FileItem? {
         if (selectedPaths.size != 1) return null
@@ -940,90 +1035,78 @@ class MainActivity : AppCompatActivity() {
         return doc
     }
 
-    private fun formatDiagnosticMs(nanos: Long): String {
-        return String.format(java.util.Locale.US, "%.2f s", nanos / 1_000_000_000.0)
-    }
-
-    private fun showDiagnostic(title: String, lines: List<String>) {
-        AlertDialog.Builder(this)
-            .setTitle(title)
-            .setMessage(lines.joinToString("\n"))
-            .setPositiveButton("OK", null)
-            .show()
-    }
-
     // ============================================================
-    // === LOAD DIRECTORY — TEST: childrenCount = 0 ===
+    // === LOAD DIRECTORY — conteggio figli in background ===
     // ============================================================
     private fun loadDirectory(
-    path: String,
-    resetCategory: Boolean = false,
-    onComplete: ((Long) -> Unit)? = null
-) {
-    currentPath = path
-    txtPath.text = path
-    if (resetCategory) {
-        activeCategory = null
-        searchQuery = ""
-    }
-
-    val refreshStart = System.nanoTime()
-    executor.execute {
-        val dir = File(path)
-        val result: List<FileItem>? = if (!dir.exists() || !dir.isDirectory) {
-            null
-        } else {
-            val files = dir.listFiles()
-            if (files == null) null
-            else {
-                val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
-                filtered.map { f ->
-                    // Mostra subito la lista con childrenCount = 0
-                    FileItem(
-                        file = f,
-                        name = f.name,
-                        path = f.absolutePath,
-                        isDirectory = f.isDirectory,
-                        size = if (f.isFile) f.length() else 0L,
-                        lastModified = f.lastModified(),
-                        childrenCount = 0
-                    )
-                }
-            }
+        path: String,
+        resetCategory: Boolean = false,
+        onComplete: ((Long) -> Unit)? = null
+    ) {
+        currentPath = path
+        txtPath.text = path
+        if (resetCategory) {
+            activeCategory = null
+            searchQuery = ""
         }
 
-        mainHandler.post {
-            if (result == null) {
-                Toast.makeText(this, "Cartella non accessibile", Toast.LENGTH_SHORT).show()
-                return@post
-            }
-            allItems = result
-            applyFilters()
-            updatePasteButton()
-            onComplete?.invoke(System.nanoTime() - refreshStart)
-
-            // Calcola i conteggi DOPO, in background
-            executor.execute {
-                val updated = result.map { item ->
-                    if (item.isDirectory) {
-                        try {
-                            val count = item.file.list()?.let { arr ->
-                                if (showHidden) arr.size else arr.count { !it.startsWith(".") }
-                            } ?: 0
-                            item.copy(childrenCount = count)
-                        } catch (_: Exception) { item }
-                    } else item
+        val refreshStart = System.nanoTime()
+        executor.execute {
+            val dir = File(path)
+            val result: List<FileItem>? = if (!dir.exists() || !dir.isDirectory) {
+                null
+            } else {
+                val files = dir.listFiles()
+                if (files == null) null
+                else {
+                    val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
+                    filtered.map { f ->
+                        // Mostra subito la lista con childrenCount = 0
+                        FileItem(
+                            file = f,
+                            name = f.name,
+                            path = f.absolutePath,
+                            isDirectory = f.isDirectory,
+                            size = if (f.isFile) f.length() else 0L,
+                            lastModified = f.lastModified(),
+                            childrenCount = 0
+                        )
+                    }
                 }
-                mainHandler.post {
-                    if (currentPath == path) {
-                        allItems = updated
-                        applyFilters()
+            }
+
+            mainHandler.post {
+                if (result == null) {
+                    Toast.makeText(this, "Cartella non accessibile", Toast.LENGTH_SHORT).show()
+                    return@post
+                }
+                allItems = result
+                applyFilters()
+                updatePasteButton()
+                onComplete?.invoke(System.nanoTime() - refreshStart)
+
+                // Calcola i conteggi DOPO, in background
+                executor.execute {
+                    val updated = result.map { item ->
+                        if (item.isDirectory) {
+                            try {
+                                val count = item.file.list()?.let { arr ->
+                                    if (showHidden) arr.size else arr.count { !it.startsWith(".") }
+                                } ?: 0
+                                item.copy(childrenCount = count)
+                            } catch (_: Exception) { item }
+                        } else item
+                    }
+                    mainHandler.post {
+                        if (currentPath == path) {
+                            allItems = updated
+                            applyFilters()
+                        }
                     }
                 }
             }
         }
     }
-}
 
     private fun applyFilters() {
         var list = allItems.toList()
@@ -1486,31 +1569,31 @@ class MainActivity : AppCompatActivity() {
         renderList()
     }
 
-   private fun showSettingsDialog() {
-    val options = mutableListOf<String>()
-    options.add("Aggiorna cartella")
-    options.add(if (showHidden) "Nascondi file nascosti" else "Mostra file nascosti")
-    options.add("Rinnova permesso scrittura")
+    private fun showSettingsDialog() {
+        val options = mutableListOf<String>()
+        options.add("Aggiorna cartella")
+        options.add(if (showHidden) "Nascondi file nascosti" else "Mostra file nascosti")
+        options.add("Rinnova permesso scrittura")
 
-    AlertDialog.Builder(this)
-        .setTitle("Impostazioni")
-        .setItems(options.toTypedArray()) { _, which ->
-            when (which) {
-                0 -> { Toast.makeText(this, "Aggiornamento...", Toast.LENGTH_SHORT).show(); loadDirectory(currentPath) }
-                1 -> {
-                    showHidden = !showHidden
-                    prefs.edit().putBoolean("show_hidden", showHidden).apply()
-                    loadDirectory(currentPath)
-                }
-                2 -> {
-                    safTreeUri = null
-                    prefs.edit().remove("saf_tree_uri").apply()
-                    requestSaf { Toast.makeText(this, "Permesso rinnovato", Toast.LENGTH_SHORT).show() }
+        AlertDialog.Builder(this)
+            .setTitle("Impostazioni")
+            .setItems(options.toTypedArray()) { _, which ->
+                when (which) {
+                    0 -> { Toast.makeText(this, "Aggiornamento...", Toast.LENGTH_SHORT).show(); loadDirectory(currentPath) }
+                    1 -> {
+                        showHidden = !showHidden
+                        prefs.edit().putBoolean("show_hidden", showHidden).apply()
+                        loadDirectory(currentPath)
+                    }
+                    2 -> {
+                        safTreeUri = null
+                        prefs.edit().remove("saf_tree_uri").apply()
+                        requestSaf { Toast.makeText(this, "Permesso rinnovato", Toast.LENGTH_SHORT).show() }
+                    }
                 }
             }
-        }
-        .show()
-}
+            .show()
+    }
 
     private fun formatSize(bytes: Long): String {
         if (bytes < 1024) return "$bytes B"
