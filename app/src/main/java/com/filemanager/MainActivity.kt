@@ -895,7 +895,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // Calcola childrenCount per le cartelle (fatto UNA volta, prima di mostrare)
             val withCounts = result?.map { item ->
                 if (item.isDirectory) {
                     try {
@@ -1260,161 +1259,142 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ---------- COPIA/INCOLLA ----------
-private fun pasteFromClipboard() {
-    if (clipboardPaths.isEmpty()) {
-        Toast.makeText(this, "Niente negli appunti", Toast.LENGTH_SHORT).show()
-        return
-    }
 
-    val srcPaths = clipboardPaths.toList()
-    val action = clipboardAction
-    val dstDir = File(currentPath)
-    val dstPath = dstDir.absolutePath
+    private fun pasteFromClipboard() {
+        if (clipboardPaths.isEmpty()) {
+            Toast.makeText(this, "Niente negli appunti", Toast.LENGTH_SHORT).show()
+            return
+        }
 
-    val existingSrc = srcPaths.filter { File(it).exists() }
+        val srcPaths = clipboardPaths.toList()
+        val action = clipboardAction
+        val dstDir = File(currentPath)
+        val dstPath = dstDir.absolutePath
 
-    android.util.Log.d("PASTE_DEBUG", "=== INIZIO PASTE ===")
-    android.util.Log.d("PASTE_DEBUG", "action=$action")
-    android.util.Log.d("PASTE_DEBUG", "currentPath=$currentPath")
-    android.util.Log.d("PASTE_DEBUG", "clipboardPaths=$clipboardPaths")
-    android.util.Log.d("PASTE_DEBUG", "existingSrc.size=${existingSrc.size}")
-    for (p in existingSrc) {
-        val f = File(p)
-        android.util.Log.d("PASTE_DEBUG", "file: $p esiste=${f.exists()} dir=${f.isDirectory}")
-    }
+        val existingSrc = srcPaths.filter { File(it).exists() }
+        if (existingSrc.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("Errore Incolla")
+                .setMessage("Nessun file originale trovato")
+                .setPositiveButton("OK", null)
+                .show()
+            clipboardPaths.clear()
+            clipboardAction = null
+            exitSelectionMode()
+            updatePasteButton()
+            return
+        }
 
-    if (existingSrc.isEmpty()) {
-        AlertDialog.Builder(this)
-            .setTitle("Errore Incolla")
-            .setMessage("Nessun file originale trovato")
-            .setPositiveButton("OK", null)
-            .show()
+        Toast.makeText(
+            this,
+            if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
+            Toast.LENGTH_SHORT
+        ).show()
+
+        val finalAction = action ?: "copy"
         clipboardPaths.clear()
         clipboardAction = null
         exitSelectionMode()
         updatePasteButton()
-        return
-    }
 
-    Toast.makeText(
-        this,
-        if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
-        Toast.LENGTH_SHORT
-    ).show()
+        heavyExecutor.execute {
+            var copied = 0
+            var errorMsg = ""
+            val pool = Executors.newFixedThreadPool(COPY_THREADS)
 
-    val finalAction = action ?: "copy"
-    clipboardPaths.clear()
-    clipboardAction = null
-    exitSelectionMode()
-    updatePasteButton()
+            try {
+                for (srcPath in existingSrc) {
+                    val src = File(srcPath)
 
-    android.util.Log.d("PASTE_DEBUG", "STO PER LANCIARE HEAVY EXECUTOR")
-    heavyExecutor.execute {
-        android.util.Log.d("PASTE_DEBUG", "=== HEAVY EXECUTOR PARTITO ===")
-        var copied = 0
-        var errorMsg = ""
-        val pool = Executors.newFixedThreadPool(COPY_THREADS)
-
-        try {
-            for (srcPath in existingSrc) {
-                android.util.Log.d("PASTE_DEBUG", "TENTO COPIA: $srcPath")
-                val src = File(srcPath)
-
-                var dstName = src.name
-                var dst = File(dstDir, dstName)
-                if (dst.absolutePath == src.absolutePath || dst.exists()) {
-                    dstName = generateUniqueName(dstDir, src.name)
-                    dst = File(dstDir, dstName)
-                }
-
-                android.util.Log.d("PASTE_DEBUG", "DESTINAZIONE: ${dst.absolutePath}")
-
-                var ok = false
-                var renamed = false
-
-                if (finalAction == "cut") {
-                    try {
-                        renamed = src.renameTo(dst)
-                        ok = renamed
-                        android.util.Log.d("PASTE_DEBUG", "RENAME: $renamed")
-                    } catch (e: Exception) {
-                        android.util.Log.d("PASTE_DEBUG", "RENAME ERRORE: ${e.message}")
+                    var dstName = src.name
+                    var dst = File(dstDir, dstName)
+                    if (dst.absolutePath == src.absolutePath || dst.exists()) {
+                        dstName = generateUniqueName(dstDir, src.name)
+                        dst = File(dstDir, dstName)
                     }
-                }
 
-                if (!ok) {
-                    try {
-                        if (src.isDirectory) {
-                            android.util.Log.d("PASTE_DEBUG", "COPIA DIR: ${src.absolutePath}")
-                            copyDirectoryRecursiveParallel(src, dst, pool)
-                        } else {
-                            android.util.Log.d("PASTE_DEBUG", "COPIA FILE: ${src.absolutePath}")
-                            copyFile(src, dst)
-                        }
-                        ok = true
-                    } catch (e: Exception) {
-                        errorMsg += "\n${src.name}: ${e.message}"
-                        android.util.Log.d("PASTE_DEBUG", "COPIA ERRORE: ${e.message}")
-                    }
-                }
+                    var ok = false
+                    var renamed = false
 
-                if (!ok) {
-                    try {
-                        android.util.Log.d("PASTE_DEBUG", "PROVO SAF")
-                        ok = copyViaSaf(src, dst)
-                    } catch (e: Exception) {
-                        android.util.Log.d("PASTE_DEBUG", "SAF ERRORE: ${e.message}")
-                    }
-                }
-
-                android.util.Log.d("PASTE_DEBUG", "RISULTATO $srcPath: ok=$ok renamed=$renamed")
-
-                if (ok) {
-                    copied++
-
-                    if (finalAction == "cut" && !renamed && dst.absolutePath != src.absolutePath && src.exists()) {
+                    if (finalAction == "cut") {
                         try {
-                            var delOk = if (src.isDirectory) deleteRecursivelyFast(src) else src.delete()
-                            if (!delOk) {
-                                delOk = deleteViaSafTree(src.absolutePath)
+                            renamed = src.renameTo(dst)
+                            ok = renamed
+                        } catch (_: Exception) {}
+                    }
+
+                    if (!ok) {
+                        try {
+                            if (src.isDirectory) {
+                                copyDirectoryRecursiveParallel(src, dst, pool)
+                                ok = true
+                            } else {
+                                copyFile(src, dst)
+                                ok = true
+                            }
+                        } catch (e: Exception) {
+                            errorMsg += "\n${src.name}: ${e.message}"
+                        }
+                    }
+
+                    if (!ok) {
+                        try {
+                            if (src.isFile) {
+                                ok = copyFileViaSaf(src, dst)
+                            } else {
+                                ok = copyViaSaf(src, dst)
                             }
                         } catch (_: Exception) {}
                     }
+
+                    if (ok) {
+                        copied++
+
+                        if (finalAction == "cut" && !renamed && dst.absolutePath != src.absolutePath && src.exists()) {
+                            try {
+                                var delOk = if (src.isDirectory) deleteRecursivelyFast(src) else src.delete()
+                                if (!delOk) {
+                                    delOk = deleteViaSafTree(src.absolutePath)
+                                }
+                            } catch (_: Exception) {}
+                        }
+                    }
                 }
-            }
-        } finally {
-            pool.shutdown()
-        }
-
-        if (copied > 0) {
-            scanPath(dstPath)
-        }
-
-        val finalCopied = copied
-
-        android.util.Log.d("PASTE_DEBUG", "=== FINE: copied=$finalCopied errori=$errorMsg ===")
-
-        mainHandler.post {
-            if (finalCopied > 0) {
-                Toast.makeText(
-                    this,
-                    if (finalAction == "cut") "Spostati $finalCopied file" else "Copiati $finalCopied file",
-                    Toast.LENGTH_SHORT
-                ).show()
-            } else if (errorMsg.isNotEmpty()) {
-                AlertDialog.Builder(this)
-                    .setTitle("Errore Incolla")
-                    .setMessage("Nessun file copiato.\n$errorMsg")
-                    .setPositiveButton("OK", null)
-                    .show()
+            } finally {
+                pool.shutdown()
             }
 
-            if (File(dstPath).exists()) {
-                loadDirectory(currentPath)
+            if (copied > 0) {
+                scanPath(dstPath)
+            }
+
+            val finalCopied = copied
+            val finalErr = errorMsg
+
+            mainHandler.post {
+                if (finalCopied > 0) {
+                    Toast.makeText(
+                        this,
+                        if (finalAction == "cut") "Spostati $finalCopied file" else "Copiati $finalCopied file",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                } else if (finalErr.isNotEmpty()) {
+                    AlertDialog.Builder(this)
+                        .setTitle("Errore Incolla")
+                        .setMessage("Nessun file copiato.\n$finalErr")
+                        .setPositiveButton("OK", null)
+                        .show()
+                } else {
+                    Toast.makeText(this, "Copia fallita silenziosamente", Toast.LENGTH_LONG).show()
+                }
+
+                if (File(dstPath).exists()) {
+                    loadDirectory(currentPath)
+                }
             }
         }
     }
-}
+
     private fun generateUniqueName(dir: File, originalName: String): String {
         val dotIndex = originalName.lastIndexOf('.')
         val baseName: String
@@ -1434,6 +1414,27 @@ private fun pasteFromClipboard() {
             candidate = "${baseName}_$counter$extension"
         }
         return candidate
+    }
+
+    // Copia file via SAF (usato come fallback nel paste)
+    private fun copyFileViaSaf(src: File, dst: File): Boolean {
+        return try {
+            val parentDoc = getSafDocumentFile(dst.parentFile?.absolutePath ?: "") ?: return false
+            val newFile = parentDoc.createFile(getMimeType(src.name), src.name) ?: return false
+            contentResolver.openOutputStream(newFile.uri)?.use { output ->
+                FileInputStream(src).use { input ->
+                    val buffer = ByteArray(BUFFER_SIZE)
+                    var length: Int
+                    while (input.read(buffer).also { length = it } > 0) {
+                        output.write(buffer, 0, length)
+                    }
+                    output.flush()
+                }
+            } ?: return false
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun copyViaSaf(src: File, dst: File): Boolean {
@@ -1492,6 +1493,8 @@ private fun pasteFromClipboard() {
 
     private fun copyFile(src: File, dst: File) {
         dst.parentFile?.mkdirs()
+
+        // Tentativo 1: FileChannel (veloce)
         try {
             FileInputStream(src).use { input ->
                 FileOutputStream(dst).use { output ->
@@ -1504,7 +1507,14 @@ private fun pasteFromClipboard() {
                     }
                 }
             }
-        } catch (_: Exception) {
+            if (dst.exists() && dst.length() == src.length()) {
+                try { dst.setLastModified(src.lastModified()) } catch (_: Exception) {}
+                return
+            }
+        } catch (_: Exception) {}
+
+        // Tentativo 2: buffer classico
+        try {
             FileInputStream(src).use { input ->
                 FileOutputStream(dst).use { output ->
                     val buffer = ByteArray(BUFFER_SIZE)
@@ -1515,8 +1525,14 @@ private fun pasteFromClipboard() {
                     output.flush()
                 }
             }
-        }
-        try { dst.setLastModified(src.lastModified()) } catch (_: Exception) {}
+            if (dst.exists() && dst.length() == src.length()) {
+                try { dst.setLastModified(src.lastModified()) } catch (_: Exception) {}
+                return
+            }
+        } catch (_: Exception) {}
+
+        // Se arriviamo qui, entrambi i tentativi sono falliti
+        throw java.io.IOException("Impossibile copiare ${src.absolutePath} in ${dst.absolutePath}")
     }
 
     private fun copyDirectoryRecursiveParallel(src: File, dst: File, pool: java.util.concurrent.ExecutorService) {
