@@ -47,6 +47,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.file.Files
+import java.util.Collections
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.zip.ZipEntry
@@ -1258,7 +1259,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COPIA/INCOLLA ----------
+    // ---------- COPIA/INCOLLA (UI OTTIMISTICA + COPIA IN BACKGROUND) ----------
 
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
@@ -1285,6 +1286,39 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        // 1) UI OTTIMISTICA: crea placeholder e mostrali SUBITO
+        val placeholders = mutableListOf<FileItem>()
+        val pendingCopy = mutableListOf<Pair<String, File>>() // srcPath -> dst
+
+        for (srcPath in existingSrc) {
+            val src = File(srcPath)
+            var dstName = src.name
+            var dst = File(dstDir, dstName)
+            if (dst.absolutePath == src.absolutePath || dst.exists()) {
+                dstName = generateUniqueName(dstDir, src.name)
+                dst = File(dstDir, dstName)
+            }
+            placeholders.add(
+                FileItem(
+                    file = dst,
+                    name = dstName,
+                    path = dst.absolutePath,
+                    isDirectory = src.isDirectory,
+                    size = if (src.isFile) src.length() else 0L,
+                    lastModified = System.currentTimeMillis(),
+                    childrenCount = 0
+                )
+            )
+            pendingCopy.add(srcPath to dst)
+        }
+
+        // Aggiungi i placeholder alla lista visibile SUBITO
+        val currentList = allItems.toMutableList()
+        currentList.addAll(placeholders)
+        allItems = currentList
+        applyFilters()
+
+        // 2) Toast breve
         Toast.makeText(
             this,
             if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
@@ -1297,21 +1331,17 @@ class MainActivity : AppCompatActivity() {
         exitSelectionMode()
         updatePasteButton()
 
+        // 3) COPIA IN BACKGROUND
         heavyExecutor.execute {
             var copied = 0
             var errorMsg = ""
             val pool = Executors.newFixedThreadPool(COPY_THREADS)
 
             try {
-                for (srcPath in existingSrc) {
+                for ((index, pair) in pendingCopy.withIndex()) {
+                    val srcPath = pair.first
                     val src = File(srcPath)
-
-                    var dstName = src.name
-                    var dst = File(dstDir, dstName)
-                    if (dst.absolutePath == src.absolutePath || dst.exists()) {
-                        dstName = generateUniqueName(dstDir, src.name)
-                        dst = File(dstDir, dstName)
-                    }
+                    val dst = placeholders[index].file
 
                     var ok = false
                     var renamed = false
@@ -1388,7 +1418,9 @@ class MainActivity : AppCompatActivity() {
                         .show()
                 }
 
-                if (File(dstPath).exists()) {
+                // 4) RICARICA la lista SOLO se siamo ancora nella cartella di destinazione
+                //    (il reload rimuove i placeholder e mostra i file reali)
+                if (currentPath == dstPath) {
                     loadDirectory(currentPath)
                 }
             }
@@ -1563,7 +1595,7 @@ class MainActivity : AppCompatActivity() {
         val files = src.listFiles()
             ?: throw java.io.IOException("Impossibile leggere: ${src.absolutePath}")
 
-        val errors = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val errors = Collections.synchronizedList(mutableListOf<String>())
         val futures = mutableListOf<Future<*>>()
 
         for (f in files) {
