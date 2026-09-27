@@ -257,71 +257,52 @@ class MainActivity : AppCompatActivity() {
     // === ELIMINA — File diretto, SAF solo se File fallisce ===
     // ============================================================
     private fun deleteSelectedFiles() {
-        if (selectedPaths.isEmpty()) return
+    if (selectedPaths.isEmpty()) return
 
-        val count = selectedPaths.size
-        val pathAtStart = currentPath
+    val count = selectedPaths.size
+    val pathAtStart = currentPath
 
-        AlertDialog.Builder(this)
-            .setTitle("Elimina")
-            .setMessage("Eliminare $count file?")
-            .setPositiveButton("Elimina") { _, _ ->
-                val pathsToDelete = selectedPaths.toList()
-                Toast.makeText(this, "Eliminazione in corso...", Toast.LENGTH_SHORT).show()
+    AlertDialog.Builder(this)
+        .setTitle("Elimina")
+        .setMessage("Eliminare $count file?")
+        .setPositiveButton("Elimina") { _, _ ->
+            val pathsToDelete = selectedPaths.toList()
+            Toast.makeText(this, "Eliminazione in corso...", Toast.LENGTH_SHORT).show()
 
-                executor.execute {
-                    val operationStart = System.nanoTime()
-                    var directDeleteNanos = 0L
-                    var safDeleteNanos = 0L
-                    var deleted = 0
-                    for (path in pathsToDelete) {
-                        try {
-                            val f = File(path)
+            executor.execute {
+                var deleted = 0
+                for (path in pathsToDelete) {
+                    try {
+                        val f = File(path)
 
-                            // 1) File diretto
-                            val directStart = System.nanoTime()
-                            var ok = if (f.isDirectory) deleteRecursively(f) else f.delete()
-                            directDeleteNanos += System.nanoTime() - directStart
+                        // 1) File diretto
+                        var ok = if (f.isDirectory) deleteRecursively(f) else f.delete()
 
-                            // 2) SAF solo se File fallisce
-                            if (!ok) {
-                                val safStart = System.nanoTime()
-                                val doc = getSafDocumentFile(path)
-                                if (doc != null) {
-                                    ok = try {
-                                        if (doc.isDirectory) deleteDocumentRecursive(doc) else doc.delete()
-                                    } catch (_: Exception) { false }
-                                }
-                                safDeleteNanos += System.nanoTime() - safStart
+                        // 2) SAF solo se File fallisce
+                        if (!ok) {
+                            val doc = getSafDocumentFile(path)
+                            if (doc != null) {
+                                ok = try {
+                                    if (doc.isDirectory) deleteDocumentRecursive(doc) else doc.delete()
+                                } catch (_: Exception) { false }
                             }
-
-                            if (ok) deleted++
-                        } catch (_: Exception) {}
-                    }
-
-                    val finalDeleted = deleted
-                    val operationNanos = System.nanoTime() - operationStart
-                    mainHandler.post {
-                        Toast.makeText(this, "Eliminati $finalDeleted file", Toast.LENGTH_SHORT).show()
-                        exitSelectionMode()
-                        loadDirectory(pathAtStart) { refreshNanos ->
-                            showDiagnostic(
-                                "Diagnostica cancellazione",
-                                listOf(
-                                    "File.delete()/ricorsivo: ${formatDiagnosticMs(directDeleteNanos)}",
-                                    "Fallback SAF: ${formatDiagnosticMs(safDeleteNanos)}",
-                                    "Refresh elenco: ${formatDiagnosticMs(refreshNanos)}",
-                                    "Operazione filesystem: ${formatDiagnosticMs(operationNanos)}",
-                                    "TOTALE fino a elenco aggiornato: ${formatDiagnosticMs(operationNanos + refreshNanos)}"
-                                )
-                            )
                         }
-                    }
+
+                        if (ok) deleted++
+                    } catch (_: Exception) {}
+                }
+
+                val finalDeleted = deleted
+                mainHandler.post {
+                    Toast.makeText(this, "Eliminati $finalDeleted file", Toast.LENGTH_SHORT).show()
+                    exitSelectionMode()
+                    loadDirectory(pathAtStart)
                 }
             }
-            .setNegativeButton("Annulla", null)
-            .show()
-    }
+        }
+        .setNegativeButton("Annulla", null)
+        .show()
+}
 
     private fun deleteRecursively(file: File): Boolean {
         if (file.isDirectory) {
@@ -364,142 +345,116 @@ class MainActivity : AppCompatActivity() {
     // ============================================================
     // === COPIA/INCOLLA — File prima, SAF solo come fallback ===
     // ============================================================
-    private fun pasteFromClipboard() {
-        if (clipboardPaths.isEmpty()) {
-            Toast.makeText(this, "Niente negli appunti", Toast.LENGTH_SHORT).show()
-            return
-        }
+  private fun pasteFromClipboard() {
+    if (clipboardPaths.isEmpty()) {
+        Toast.makeText(this, "Niente negli appunti", Toast.LENGTH_SHORT).show()
+        return
+    }
 
-        val srcPaths = clipboardPaths.toList()
-        val action = clipboardAction
-        val dstDir = File(currentPath)
+    val srcPaths = clipboardPaths.toList()
+    val action = clipboardAction
+    val dstDir = File(currentPath)
 
-        val existingSrc = srcPaths.filter { File(it).exists() }
-        if (existingSrc.isEmpty()) {
-            AlertDialog.Builder(this)
-                .setTitle("Errore Incolla")
-                .setMessage("Nessun file originale trovato")
-                .setPositiveButton("OK", null)
-                .show()
-            clipboardPaths.clear()
-            clipboardAction = null
-            exitSelectionMode()
-            updatePasteButton()
-            return
-        }
+    val existingSrc = srcPaths.filter { File(it).exists() }
+    if (existingSrc.isEmpty()) {
+        AlertDialog.Builder(this)
+            .setTitle("Errore Incolla")
+            .setMessage("Nessun file originale trovato")
+            .setPositiveButton("OK", null)
+            .show()
+        clipboardPaths.clear()
+        clipboardAction = null
+        exitSelectionMode()
+        updatePasteButton()
+        return
+    }
 
-        Toast.makeText(
-            this,
-            if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
-            Toast.LENGTH_SHORT
-        ).show()
+    Toast.makeText(
+        this,
+        if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
+        Toast.LENGTH_SHORT
+    ).show()
 
-        executor.execute {
-            val operationStart = System.nanoTime()
-            var directCopyNanos = 0L
-            var safCopyNanos = 0L
-            var cutDeleteNanos = 0L
-            var copied = 0
-            var errorMsg = ""
-            val copiedPaths = ArrayList<String>()
+    executor.execute {
+        var copied = 0
+        var errorMsg = ""
+        val copiedPaths = ArrayList<String>()
 
-            for (srcPath in existingSrc) {
-                val src = File(srcPath)
+        for (srcPath in existingSrc) {
+            val src = File(srcPath)
 
-                var dstName = src.name
-                var dst = File(dstDir, dstName)
+            var dstName = src.name
+            var dst = File(dstDir, dstName)
 
-                if (dst.absolutePath == src.absolutePath || dst.exists()) {
-                    dstName = generateUniqueName(dstDir, src.name)
-                    dst = File(dstDir, dstName)
-                }
-
-                var ok = false
-                var renamed = false
-
-                // 1) File diretto
-                val directStart = System.nanoTime()
-                try {
-                    if (action == "cut") {
-                        renamed = src.renameTo(dst)
-                        ok = renamed
-                    }
-                    if (!ok) {
-                        if (src.isDirectory) copyDirectoryRecursive(src, dst)
-                        else copyFile(src, dst)
-                        ok = true
-                    }
-                } catch (e: Exception) {
-                    errorMsg += "\n${src.name}: ${e.message}"
-                    ok = false
-                }
-                directCopyNanos += System.nanoTime() - directStart
-
-                // 2) SAF solo se File fallisce
-                if (!ok) {
-                    val safStart = System.nanoTime()
-                    try { ok = copyViaSaf(src, dst) } catch (_: Exception) {}
-                    safCopyNanos += System.nanoTime() - safStart
-                }
-
-                if (ok) {
-                    copied++
-                    copiedPaths.add(dst.absolutePath)
-
-                    if (action == "cut" && !renamed && dst.absolutePath != src.absolutePath && src.exists()) {
-                        val deleteStart = System.nanoTime()
-                        try {
-                            if (src.isDirectory) deleteRecursively(src) else src.delete()
-                        } catch (_: Exception) {}
-                        cutDeleteNanos += System.nanoTime() - deleteStart
-                    }
-                }
+            if (dst.absolutePath == src.absolutePath || dst.exists()) {
+                dstName = generateUniqueName(dstDir, src.name)
+                dst = File(dstDir, dstName)
             }
 
-            val scanStart = System.nanoTime()
-            scanPaths(copiedPaths)
-            val scanNanos = System.nanoTime() - scanStart
+            var ok = false
+            var renamed = false
 
-            val finalCopied = copied
-            val finalErr = errorMsg
-            val wasCut = action == "cut"
-            val operationNanos = System.nanoTime() - operationStart
-
-            mainHandler.post {
-                if (finalCopied > 0) {
-                    Toast.makeText(
-                        this,
-                        if (wasCut) "Spostati $finalCopied file" else "Copiati $finalCopied file",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    clipboardPaths.clear()
-                    clipboardAction = null
-                    exitSelectionMode()
-                    updatePasteButton()
-                    loadDirectory(currentPath) { refreshNanos ->
-                        showDiagnostic(
-                            "Diagnostica incolla",
-                            listOf(
-                                "Copia diretta (File): ${formatDiagnosticMs(directCopyNanos)}",
-                                "Copia via SAF (fallback): ${formatDiagnosticMs(safCopyNanos)}",
-                                "Cancellazione sorgente (cut): ${formatDiagnosticMs(cutDeleteNanos)}",
-                                "Scansione MediaStore finale: ${formatDiagnosticMs(scanNanos)}",
-                                "Operazione filesystem: ${formatDiagnosticMs(operationNanos)}",
-                                "Refresh elenco: ${formatDiagnosticMs(refreshNanos)}",
-                                "TOTALE fino a elenco aggiornato: ${formatDiagnosticMs(operationNanos + refreshNanos)}"
-                            )
-                        )
-                    }
-                } else {
-                    AlertDialog.Builder(this)
-                        .setTitle("Errore Incolla")
-                        .setMessage("Nessun file copiato.\n$finalErr")
-                        .setPositiveButton("OK", null)
-                        .show()
+            // 1) File diretto
+            try {
+                if (action == "cut") {
+                    renamed = src.renameTo(dst)
+                    ok = renamed
                 }
+                if (!ok) {
+                    if (src.isDirectory) copyDirectoryRecursive(src, dst)
+                    else copyFile(src, dst)
+                    ok = true
+                }
+            } catch (e: Exception) {
+                errorMsg += "\n${src.name}: ${e.message}"
+                ok = false
+            }
+
+            // 2) SAF solo se File fallisce
+            if (!ok) {
+                try { ok = copyViaSaf(src, dst) } catch (_: Exception) {}
+            }
+
+            if (ok) {
+                copied++
+                copiedPaths.add(dst.absolutePath)
+
+                if (action == "cut" && !renamed && dst.absolutePath != src.absolutePath && src.exists()) {
+                    try {
+                        if (src.isDirectory) deleteRecursively(src) else src.delete()
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+
+        scanPaths(copiedPaths)
+
+        val finalCopied = copied
+        val finalErr = errorMsg
+        val wasCut = action == "cut"
+
+        mainHandler.post {
+            if (finalCopied > 0) {
+                Toast.makeText(
+                    this,
+                    if (wasCut) "Spostati $finalCopied file" else "Copiati $finalCopied file",
+                    Toast.LENGTH_SHORT
+                ).show()
+                clipboardPaths.clear()
+                clipboardAction = null
+                exitSelectionMode()
+                updatePasteButton()
+                loadDirectory(currentPath)
+            } else {
+                AlertDialog.Builder(this)
+                    .setTitle("Errore Incolla")
+                    .setMessage("Nessun file copiato.\n$finalErr")
+                    .setPositiveButton("OK", null)
+                    .show()
             }
         }
     }
+}
 
     private fun generateUniqueName(dir: File, originalName: String): String {
         val dotIndex = originalName.lastIndexOf('.')
