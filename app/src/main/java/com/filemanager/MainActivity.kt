@@ -17,7 +17,6 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.StatFs
-import android.os.storage.StorageEventListener
 import android.os.storage.StorageManager
 import android.os.storage.StorageVolume
 import android.provider.DocumentsContract
@@ -100,10 +99,38 @@ class MainActivity : AppCompatActivity() {
     private var safTreeUri: Uri? = null
     private var pendingSafAction: (() -> Unit)? = null
 
-    private var storageEventListener: StorageEventListener? = null
-
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Polling dei volumi di archiviazione (USB, SD) per aggiornare le card in tempo reale
+    private val storagePollRunnable = object : Runnable {
+        private var lastSnapshot: String = ""
+        override fun run() {
+            try {
+                val sm = getSystemService(STORAGE_SERVICE) as StorageManager
+                val snapshot = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    sm.storageVolumes.joinToString("|") {
+                        "${it.uuid}:${it.state}:${it.isRemovable}"
+                    }
+                } else ""
+
+                if (snapshot != lastSnapshot) {
+                    lastSnapshot = snapshot
+                    updateStorageCards()
+
+                    // Se eravamo dentro la USB appena staccata, torna alla root
+                    if (currentPath.startsWith("/storage/") &&
+                        currentPath != rootInternal &&
+                        !File(currentPath).exists()
+                    ) {
+                        loadDirectory(rootInternal, resetCategory = true)
+                    }
+                }
+            } catch (_: Exception) {}
+
+            mainHandler.postDelayed(this, 2000)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -175,36 +202,9 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
 
-        // Registra listener per mount/unmount volumi (USB, SD)
-        if (storageEventListener == null) {
-            try {
-                val sm = getSystemService(STORAGE_SERVICE) as StorageManager
-                storageEventListener = object : StorageEventListener() {
-                    override fun onStorageStateChanged(
-                        path: String?,
-                        oldState: String?,
-                        newState: String?
-                    ) {
-                        mainHandler.postDelayed({
-                            updateStorageCards()
-                            if (currentPath.startsWith("/storage/") &&
-                                currentPath != rootInternal &&
-                                !File(currentPath).exists()
-                            ) {
-                                loadDirectory(rootInternal, resetCategory = true)
-                            }
-                        }, 1000)
-                    }
-
-                    override fun onVolumeStateChanged(vol: StorageVolume?, oldState: Int, newState: Int) {
-                        mainHandler.postDelayed({
-                            updateStorageCards()
-                        }, 1000)
-                    }
-                }
-                sm.registerListener(storageEventListener)
-            } catch (_: Exception) {}
-        }
+        // Avvia polling volumi storage
+        mainHandler.removeCallbacks(storagePollRunnable)
+        mainHandler.post(storagePollRunnable)
 
         if (hasStoragePermission()) {
             loadDirectory(currentPath)
@@ -225,13 +225,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
-        try {
-            storageEventListener?.let {
-                val sm = getSystemService(STORAGE_SERVICE) as StorageManager
-                sm.unregisterListener(it)
-            }
-        } catch (_: Exception) {}
-        storageEventListener = null
+        mainHandler.removeCallbacks(storagePollRunnable)
     }
 
     override fun onDestroy() {
@@ -662,8 +656,7 @@ class MainActivity : AppCompatActivity() {
                                 volumes.add(StorageVolumeInfo(label, path, usedBytes, totalBytes))
                             } catch (_: Exception) {}
                         } else {
-                            // Volume rilevato ma senza path accessibile: aggiungi comunque la card
-                            // (utile su Android 11+ dove il path della USB è nascosto)
+                            // Volume rilevato ma senza path accessibile (USB su Android 11+)
                             try {
                                 val label = vol.getDescription(this) ?: "Storage esterno"
                                 if (vol.state == Environment.MEDIA_MOUNTED) {
