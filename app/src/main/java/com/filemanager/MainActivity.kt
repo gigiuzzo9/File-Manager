@@ -47,6 +47,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.file.Files
+import java.util.Collections
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.zip.ZipEntry
@@ -57,9 +58,9 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val REQ_SAF = 1001
-        private const val BUFFER_SIZE = 262144
-        private const val ZIP_BUFFER_SIZE = 32768
-        private val COPY_THREADS = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 8)
+        private const val BUFFER_SIZE = 65536        // 64 KB ottimale per Android
+        private const val ZIP_BUFFER_SIZE = 32768    // 32 KB
+        private val COPY_THREADS = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(4, 8)
     }
 
     private lateinit var recycler: RecyclerView
@@ -1337,7 +1338,6 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
-                    // Fallback SAF per CARTELLE (nuovo)
                     if (!ok && src.isDirectory) {
                         try {
                             ok = copyDirectoryViaSaf(src, dst)
@@ -1347,7 +1347,6 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
-                    // Fallback SAF per FILE singoli
                     if (!ok && src.isFile) {
                         try {
                             ok = copyFileViaSaf(src, dst)
@@ -1391,8 +1390,6 @@ class MainActivity : AppCompatActivity() {
                         .setMessage("Nessun file copiato.\n$finalErr")
                         .setPositiveButton("OK", null)
                         .show()
-                } else {
-                    Toast.makeText(this, "Copia fallita silenziosamente", Toast.LENGTH_LONG).show()
                 }
 
                 if (File(dstPath).exists()) {
@@ -1423,7 +1420,6 @@ class MainActivity : AppCompatActivity() {
         return candidate
     }
 
-    // Copia file via SAF (usato come fallback)
     private fun copyFileViaSaf(src: File, dst: File): Boolean {
         return try {
             val parentDoc = getSafDocumentFile(dst.parentFile?.absolutePath ?: "") ?: return false
@@ -1444,7 +1440,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Copia cartella via SAF (nuova funzione)
     private fun copyDirectoryViaSaf(src: File, dst: File): Boolean {
         return try {
             val parentDir = dst.parentFile ?: return false
@@ -1524,7 +1519,6 @@ class MainActivity : AppCompatActivity() {
     private fun copyFile(src: File, dst: File) {
         dst.parentFile?.mkdirs()
 
-        // Tentativo 1: FileChannel
         try {
             FileInputStream(src).use { input ->
                 FileOutputStream(dst).use { output ->
@@ -1537,13 +1531,10 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-            if (dst.exists() && dst.length() == src.length()) {
-                try { dst.setLastModified(src.lastModified()) } catch (_: Exception) {}
-                return
-            }
+            try { dst.setLastModified(src.lastModified()) } catch (_: Exception) {}
+            return
         } catch (_: Exception) {}
 
-        // Tentativo 2: buffer classico
         try {
             FileInputStream(src).use { input ->
                 FileOutputStream(dst).use { output ->
@@ -1555,55 +1546,57 @@ class MainActivity : AppCompatActivity() {
                     output.flush()
                 }
             }
-            if (dst.exists() && dst.length() == src.length()) {
-                try { dst.setLastModified(src.lastModified()) } catch (_: Exception) {}
-                return
-            }
+            try { dst.setLastModified(src.lastModified()) } catch (_: Exception) {}
+            return
         } catch (_: Exception) {}
 
-        throw java.io.IOException("Impossibile copiare ${src.absolutePath} in ${dst.absolutePath}")
+        throw java.io.IOException("Impossibile copiare: ${src.absolutePath} -> ${dst.absolutePath}")
     }
 
-    private fun copyDirectoryRecursiveParallel(src: File, dst: File, pool: java.util.concurrent.ExecutorService) {
-        // 1) Crea la cartella di destinazione
+    private fun copyDirectoryRecursiveParallel(
+        src: File,
+        dst: File,
+        pool: java.util.concurrent.ExecutorService
+    ) {
         if (!dst.exists()) {
             if (!dst.mkdirs() && !dst.exists()) {
-                throw java.io.IOException("Impossibile creare la cartella: ${dst.absolutePath}")
+                throw java.io.IOException("Impossibile creare: ${dst.absolutePath}")
             }
-        }
-        if (!dst.isDirectory) {
-            throw java.io.IOException("La destinazione non è una cartella: ${dst.absolutePath}")
         }
 
         val files = src.listFiles()
-            ?: throw java.io.IOException("Impossibile leggere la cartella: ${src.absolutePath}")
+            ?: throw java.io.IOException("Impossibile leggere: ${src.absolutePath}")
 
+        val errors = Collections.synchronizedList(mutableListOf<String>())
         val futures = mutableListOf<Future<*>>()
-        val errors = mutableListOf<String>()
 
         for (f in files) {
             val newFile = File(dst, f.name)
             if (f.isDirectory) {
-                copyDirectoryRecursiveParallel(f, newFile, pool)
+                futures.add(pool.submit {
+                    try {
+                        copyDirectoryRecursiveParallel(f, newFile, pool)
+                    } catch (e: Exception) {
+                        errors.add("${f.name}: ${e.message}")
+                    }
+                })
             } else {
                 futures.add(pool.submit {
                     try {
                         copyFile(f, newFile)
                     } catch (e: Exception) {
-                        synchronized(errors) {
-                            errors.add("${f.name}: ${e.message}")
-                        }
+                        errors.add("${f.name}: ${e.message}")
                     }
                 })
             }
         }
 
-        futures.forEach {
-            try { it.get() } catch (_: Exception) {}
+        for (future in futures) {
+            try { future.get() } catch (_: Exception) {}
         }
 
         if (errors.isNotEmpty()) {
-            throw java.io.IOException("Errori nella copia:\n${errors.joinToString("\n")}")
+            throw java.io.IOException("Errori:\n${errors.joinToString("\n")}")
         }
     }
 
