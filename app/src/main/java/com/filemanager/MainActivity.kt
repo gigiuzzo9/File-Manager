@@ -895,12 +895,24 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
+            // Calcola childrenCount per le cartelle (fatto UNA volta, prima di mostrare)
+            val withCounts = result?.map { item ->
+                if (item.isDirectory) {
+                    try {
+                        val count = item.file.list()?.let { arr ->
+                            if (showHidden) arr.size else arr.count { !it.startsWith(".") }
+                        } ?: 0
+                        item.copy(childrenCount = count)
+                    } catch (_: Exception) { item }
+                } else item
+            }
+
             mainHandler.post {
-                if (result == null) {
+                if (withCounts == null) {
                     Toast.makeText(this, "Cartella non accessibile", Toast.LENGTH_SHORT).show()
                     return@post
                 }
-                allItems = result
+                allItems = withCounts
                 applyFilters()
                 updatePasteButton()
             }
@@ -1247,6 +1259,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- COPIA/INCOLLA ----------
+
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
             Toast.makeText(this, "Niente negli appunti", Toast.LENGTH_SHORT).show()
@@ -1272,33 +1286,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val optimisticItems = mutableListOf<FileItem>()
-        for (srcPath in existingSrc) {
-            val src = File(srcPath)
-            var dstName = src.name
-            var dst = File(dstDir, dstName)
-            if (dst.absolutePath == src.absolutePath || dst.exists()) {
-                dstName = generateUniqueName(dstDir, src.name)
-                dst = File(dstDir, dstName)
-            }
-            optimisticItems.add(
-                FileItem(
-                    file = dst,
-                    name = dstName,
-                    path = dst.absolutePath,
-                    isDirectory = src.isDirectory,
-                    size = if (src.isFile) src.length() else 0L,
-                    lastModified = System.currentTimeMillis(),
-                    childrenCount = 0
-                )
-            )
-        }
-
-        val currentList = allItems.toMutableList()
-        currentList.addAll(optimisticItems)
-        allItems = currentList
-        applyFilters()
-
         Toast.makeText(
             this,
             if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
@@ -1313,12 +1300,19 @@ class MainActivity : AppCompatActivity() {
 
         heavyExecutor.execute {
             var copied = 0
+            var errorMsg = ""
             val pool = Executors.newFixedThreadPool(COPY_THREADS)
 
             try {
-                for ((index, srcPath) in existingSrc.withIndex()) {
+                for (srcPath in existingSrc) {
                     val src = File(srcPath)
-                    val dst = optimisticItems[index].file
+
+                    var dstName = src.name
+                    var dst = File(dstDir, dstName)
+                    if (dst.absolutePath == src.absolutePath || dst.exists()) {
+                        dstName = generateUniqueName(dstDir, src.name)
+                        dst = File(dstDir, dstName)
+                    }
 
                     var ok = false
                     var renamed = false
@@ -1338,7 +1332,9 @@ class MainActivity : AppCompatActivity() {
                                 copyFile(src, dst)
                             }
                             ok = true
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            errorMsg += "\n${src.name}: ${e.message}"
+                        }
                     }
 
                     if (!ok) {
@@ -1369,19 +1365,21 @@ class MainActivity : AppCompatActivity() {
             val finalCopied = copied
 
             mainHandler.post {
-                if (finalCopied < existingSrc.size) {
-                    val placeholdersToRemove = mutableSetOf<String>()
-                    for ((index, item) in optimisticItems.withIndex()) {
-                        if (index >= finalCopied) {
-                            placeholdersToRemove.add(item.path)
-                        }
-                    }
-                    val realItems = allItems.filter { item ->
-                        !placeholdersToRemove.contains(item.path) || File(item.path).exists()
-                    }
-                    allItems = realItems
+                if (finalCopied > 0) {
+                    Toast.makeText(
+                        this,
+                        if (finalAction == "cut") "Spostati $finalCopied file" else "Copiati $finalCopied file",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                } else if (errorMsg.isNotEmpty()) {
+                    AlertDialog.Builder(this)
+                        .setTitle("Errore Incolla")
+                        .setMessage("Nessun file copiato.\n$errorMsg")
+                        .setPositiveButton("OK", null)
+                        .show()
                 }
 
+                // Ricarica SEMPRE la cartella corrente
                 if (File(dstPath).exists()) {
                     loadDirectory(currentPath)
                 }
