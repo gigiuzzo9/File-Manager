@@ -1083,54 +1083,74 @@ class MainActivity : AppCompatActivity() {
     // === LOAD DIRECTORY — TEST: childrenCount = 0 ===
     // ============================================================
     private fun loadDirectory(
-        path: String,
-        resetCategory: Boolean = false,
-        onComplete: ((Long) -> Unit)? = null
-    ) {
-        currentPath = path
-        txtPath.text = path
-        if (resetCategory) {
-            activeCategory = null
-            searchQuery = ""
+    path: String,
+    resetCategory: Boolean = false,
+    onComplete: ((Long) -> Unit)? = null
+) {
+    currentPath = path
+    txtPath.text = path
+    if (resetCategory) {
+        activeCategory = null
+        searchQuery = ""
+    }
+
+    val refreshStart = System.nanoTime()
+    executor.execute {
+        val dir = File(path)
+        val result: List<FileItem>? = if (!dir.exists() || !dir.isDirectory) {
+            null
+        } else {
+            val files = dir.listFiles()
+            if (files == null) null
+            else {
+                val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
+                filtered.map { f ->
+                    // Mostra subito la lista con childrenCount = 0
+                    FileItem(
+                        file = f,
+                        name = f.name,
+                        path = f.absolutePath,
+                        isDirectory = f.isDirectory,
+                        size = if (f.isFile) f.length() else 0L,
+                        lastModified = f.lastModified(),
+                        childrenCount = 0
+                    )
+                }
+            }
         }
 
-        val refreshStart = System.nanoTime()
-        executor.execute {
-            val dir = File(path)
-            val result: List<FileItem>? = if (!dir.exists() || !dir.isDirectory) {
-                null
-            } else {
-                val files = dir.listFiles()
-                if (files == null) null
-                else {
-                    val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
-                    filtered.map { f ->
-                        // === TEST: childrenCount = 0, niente listFiles() per ogni cartella ===
-                        FileItem(
-                            file = f,
-                            name = f.name,
-                            path = f.absolutePath,
-                            isDirectory = f.isDirectory,
-                            size = if (f.isFile) f.length() else 0L,
-                            lastModified = f.lastModified(),
-                            childrenCount = 0
-                        )
+        mainHandler.post {
+            if (result == null) {
+                Toast.makeText(this, "Cartella non accessibile", Toast.LENGTH_SHORT).show()
+                return@post
+            }
+            allItems = result
+            applyFilters()
+            updatePasteButton()
+            onComplete?.invoke(System.nanoTime() - refreshStart)
+
+            // Calcola i conteggi DOPO, in background
+            executor.execute {
+                val updated = result.map { item ->
+                    if (item.isDirectory) {
+                        try {
+                            val count = item.file.list()?.let { arr ->
+                                if (showHidden) arr.size else arr.count { !it.startsWith(".") }
+                            } ?: 0
+                            item.copy(childrenCount = count)
+                        } catch (_: Exception) { item }
+                    } else item
+                }
+                mainHandler.post {
+                    if (currentPath == path) {
+                        allItems = updated
+                        applyFilters()
                     }
                 }
             }
-
-            mainHandler.post {
-                if (result == null) {
-                    Toast.makeText(this, "Cartella non accessibile", Toast.LENGTH_SHORT).show()
-                    return@post
-                }
-                allItems = result
-                applyFilters()
-                updatePasteButton()
-                onComplete?.invoke(System.nanoTime() - refreshStart)
-            }
         }
     }
+}
 
     private fun applyFilters() {
         var list = allItems.toList()
