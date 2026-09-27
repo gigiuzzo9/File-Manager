@@ -17,6 +17,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.StatFs
+import android.os.storage.StorageEventListener
 import android.os.storage.StorageManager
 import android.os.storage.StorageVolume
 import android.provider.DocumentsContract
@@ -99,6 +100,8 @@ class MainActivity : AppCompatActivity() {
     private var safTreeUri: Uri? = null
     private var pendingSafAction: (() -> Unit)? = null
 
+    private var storageEventListener: StorageEventListener? = null
+
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -170,22 +173,71 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onResume() {
-    super.onResume()
-    if (hasStoragePermission()) {
-        loadDirectory(currentPath)
+        super.onResume()
 
-        if (safTreeUri == null && !prefs.getBoolean("saf_requested", false)) {
-            prefs.edit().putBoolean("saf_requested", true).apply()
-            requestSaf {
-                Toast.makeText(this, "Permesso completo concesso", Toast.LENGTH_SHORT).show()
-                updateStorageCards()
-                loadDirectory(currentPath)
+        // Registra listener per mount/unmount volumi (USB, SD)
+        if (storageEventListener == null) {
+            try {
+                val sm = getSystemService(STORAGE_SERVICE) as StorageManager
+                storageEventListener = object : StorageEventListener() {
+                    override fun onStorageStateChanged(
+                        path: String?,
+                        oldState: String?,
+                        newState: String?
+                    ) {
+                        mainHandler.postDelayed({
+                            updateStorageCards()
+                            if (currentPath.startsWith("/storage/") &&
+                                currentPath != rootInternal &&
+                                !File(currentPath).exists()
+                            ) {
+                                loadDirectory(rootInternal, resetCategory = true)
+                            }
+                        }, 1000)
+                    }
+
+                    override fun onVolumeStateChanged(vol: StorageVolume?, oldState: Int, newState: Int) {
+                        mainHandler.postDelayed({
+                            updateStorageCards()
+                        }, 1000)
+                    }
+                }
+                sm.registerListener(storageEventListener)
+            } catch (_: Exception) {}
+        }
+
+        if (hasStoragePermission()) {
+            loadDirectory(currentPath)
+
+            // Al primo avvio, dopo MANAGE_EXTERNAL_STORAGE, chiedi anche il SAF tree
+            if (safTreeUri == null && !prefs.getBoolean("saf_requested", false)) {
+                prefs.edit().putBoolean("saf_requested", true).apply()
+                requestSaf {
+                    Toast.makeText(this, "Permesso completo concesso", Toast.LENGTH_SHORT).show()
+                    updateStorageCards()
+                    loadDirectory(currentPath)
+                }
             }
         }
+        updateStorageCards()
+        updatePasteButton()
     }
-    updateStorageCards()
-    updatePasteButton()
-}
+
+    override fun onPause() {
+        super.onPause()
+        try {
+            storageEventListener?.let {
+                val sm = getSystemService(STORAGE_SERVICE) as StorageManager
+                sm.unregisterListener(it)
+            }
+        } catch (_: Exception) {}
+        storageEventListener = null
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        executor.shutdown()
+    }
 
     // ---------- ICONA TOGGLE VISTA ----------
 
@@ -609,6 +661,15 @@ class MainActivity : AppCompatActivity() {
                                 val label = vol.getDescription(this) ?: "Storage esterno"
                                 volumes.add(StorageVolumeInfo(label, path, usedBytes, totalBytes))
                             } catch (_: Exception) {}
+                        } else {
+                            // Volume rilevato ma senza path accessibile: aggiungi comunque la card
+                            // (utile su Android 11+ dove il path della USB è nascosto)
+                            try {
+                                val label = vol.getDescription(this) ?: "Storage esterno"
+                                if (vol.state == Environment.MEDIA_MOUNTED) {
+                                    volumes.add(StorageVolumeInfo(label, "", 0L, 0L))
+                                }
+                            } catch (_: Exception) {}
                         }
                     }
                 }
@@ -674,11 +735,16 @@ class MainActivity : AppCompatActivity() {
         card.addView(info)
 
         card.setOnClickListener {
-            if (vol.path == rootInternal) {
+            if (vol.path == rootInternal || vol.path.isEmpty()) {
                 activeCategory = null
                 searchQuery = ""
                 editSearch.setText("")
-                loadDirectory(rootInternal, resetCategory = true)
+                if (vol.path.isEmpty()) {
+                    // Volume senza path (USB su Android 11+): chiedi SAF
+                    requestSafForPath(rootInternal)
+                } else {
+                    loadDirectory(rootInternal, resetCategory = true)
+                }
             } else {
                 tryAccessExternalVolume(vol.path)
             }
@@ -1208,7 +1274,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COPIA/INCOLLA (fix "cut" con renameTo) ----------
+    // ---------- COPIA/INCOLLA ----------
 
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
@@ -1254,7 +1320,6 @@ class MainActivity : AppCompatActivity() {
                 var ok = false
                 var renamed = false
 
-                // === CUT: prova renameTo() PRIMA ===
                 if (action == "cut") {
                     try {
                         renamed = src.renameTo(dst)
@@ -1262,7 +1327,6 @@ class MainActivity : AppCompatActivity() {
                     } catch (_: Exception) {}
                 }
 
-                // === COPIA (o fallback del cut) ===
                 if (!ok) {
                     try {
                         if (src.isDirectory) copyDirectoryRecursive(src, dst)
@@ -1273,7 +1337,6 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                // === SAF solo se File fallisce ===
                 if (!ok) {
                     try { ok = copyViaSaf(src, dst) } catch (_: Exception) {}
                 }
@@ -1282,7 +1345,6 @@ class MainActivity : AppCompatActivity() {
                     copied++
                     scanPath(dst.absolutePath)
 
-                    // === CUT: se renameTo non ha funzionato, cancella manualmente l'originale ===
                     if (action == "cut" && !renamed && dst.absolutePath != src.absolutePath && src.exists()) {
                         try {
                             var delOk = if (src.isDirectory) deleteRecursively(src) else src.delete()
