@@ -58,8 +58,8 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val REQ_SAF = 1001
-        private const val BUFFER_SIZE = 65536        // 64 KB ottimale per Android
-        private const val ZIP_BUFFER_SIZE = 32768    // 32 KB
+        private const val BUFFER_SIZE = 65536
+        private const val ZIP_BUFFER_SIZE = 32768
         private val COPY_THREADS = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(4, 8)
     }
 
@@ -1259,7 +1259,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COPIA/INCOLLA ----------
+    // ---------- COPIA/INCOLLA (UI OTTIMISTICA + COPIA IN BACKGROUND) ----------
 
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
@@ -1286,6 +1286,39 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        // 1) UI OTTIMISTICA: crea placeholder e mostrali SUBITO
+        val placeholders = mutableListOf<FileItem>()
+        val pendingCopy = mutableListOf<Pair<String, File>>() // srcPath -> dst
+
+        for (srcPath in existingSrc) {
+            val src = File(srcPath)
+            var dstName = src.name
+            var dst = File(dstDir, dstName)
+            if (dst.absolutePath == src.absolutePath || dst.exists()) {
+                dstName = generateUniqueName(dstDir, src.name)
+                dst = File(dstDir, dstName)
+            }
+            placeholders.add(
+                FileItem(
+                    file = dst,
+                    name = dstName,
+                    path = dst.absolutePath,
+                    isDirectory = src.isDirectory,
+                    size = if (src.isFile) src.length() else 0L,
+                    lastModified = System.currentTimeMillis(),
+                    childrenCount = 0
+                )
+            )
+            pendingCopy.add(srcPath to dst)
+        }
+
+        // Aggiungi i placeholder alla lista visibile SUBITO
+        val currentList = allItems.toMutableList()
+        currentList.addAll(placeholders)
+        allItems = currentList
+        applyFilters()
+
+        // 2) Toast breve
         Toast.makeText(
             this,
             if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
@@ -1298,21 +1331,17 @@ class MainActivity : AppCompatActivity() {
         exitSelectionMode()
         updatePasteButton()
 
+        // 3) COPIA IN BACKGROUND
         heavyExecutor.execute {
             var copied = 0
             var errorMsg = ""
             val pool = Executors.newFixedThreadPool(COPY_THREADS)
 
             try {
-                for (srcPath in existingSrc) {
+                for ((index, pair) in pendingCopy.withIndex()) {
+                    val srcPath = pair.first
                     val src = File(srcPath)
-
-                    var dstName = src.name
-                    var dst = File(dstDir, dstName)
-                    if (dst.absolutePath == src.absolutePath || dst.exists()) {
-                        dstName = generateUniqueName(dstDir, src.name)
-                        dst = File(dstDir, dstName)
-                    }
+                    val dst = placeholders[index].file
 
                     var ok = false
                     var renamed = false
@@ -1341,10 +1370,7 @@ class MainActivity : AppCompatActivity() {
                     if (!ok && src.isDirectory) {
                         try {
                             ok = copyDirectoryViaSaf(src, dst)
-                            if (!ok) errorMsg += "\n${src.name}: fallback SAF cartella fallito"
-                        } catch (e: Exception) {
-                            errorMsg += "\n${src.name}: SAF ${e.message}"
-                        }
+                        } catch (_: Exception) {}
                     }
 
                     if (!ok && src.isFile) {
@@ -1392,7 +1418,9 @@ class MainActivity : AppCompatActivity() {
                         .show()
                 }
 
-                if (File(dstPath).exists()) {
+                // 4) RICARICA la lista SOLO se siamo ancora nella cartella di destinazione
+                //    (il reload rimuove i placeholder e mostra i file reali)
+                if (currentPath == dstPath) {
                     loadDirectory(currentPath)
                 }
             }
