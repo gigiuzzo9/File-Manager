@@ -57,8 +57,8 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val REQ_SAF = 1001
-        private const val BUFFER_SIZE = 262144       // 256 KB (aumentato da 128)
-        private const val ZIP_BUFFER_SIZE = 32768    // 32 KB per ZIP
+        private const val BUFFER_SIZE = 262144
+        private const val ZIP_BUFFER_SIZE = 32768
         private val COPY_THREADS = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 8)
     }
 
@@ -105,9 +105,9 @@ class MainActivity : AppCompatActivity() {
     private var pendingSafAction: (() -> Unit)? = null
 
     private val executor = Executors.newSingleThreadExecutor()
+    private val heavyExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // Polling volumi (USB, SD)
     private val storagePollRunnable = object : Runnable {
         private var lastSnapshot: String = ""
         override fun run() {
@@ -233,9 +233,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         executor.shutdown()
+        heavyExecutor.shutdown()
     }
-
-    // ---------- ICONA TOGGLE VISTA ----------
 
     private fun updateViewToggleIcon() {
         btnViewToggle.setImageResource(if (isGrid) R.drawable.grid else R.drawable.list)
@@ -250,8 +249,6 @@ class MainActivity : AppCompatActivity() {
         val shouldShow = !selectionMode && clipboardPaths.isNotEmpty()
         btnPaste.visibility = if (shouldShow) View.VISIBLE else View.GONE
     }
-
-    // ---------- SELEZIONE MULTIPLA ----------
 
     private fun enterSelectionMode(item: FileItem) {
         selectionMode = true
@@ -305,8 +302,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- ELIMINA (ISTANTANEO + BACKGROUND SILENZIOSO) ----------
-
     private fun deleteSelectedFiles() {
         if (selectedPaths.isEmpty()) return
 
@@ -317,14 +312,12 @@ class MainActivity : AppCompatActivity() {
             .setTitle("Elimina")
             .setMessage("Eliminare $count file?")
             .setPositiveButton("Elimina") { _, _ ->
-                // 1) Rimuovi SUBITO dalla lista visibile — l'utente vede sparire all'istante
                 val remaining = allItems.filter { !selectedPaths.contains(it.path) }
                 allItems = remaining
                 displayedItems = displayedItems.filter { !selectedPaths.contains(it.path) }
                 exitSelectionMode()
                 renderList()
 
-                // 2) Cancella in background SENZA nessun toast/avviso
                 executor.execute {
                     for (path in pathsToDelete) {
                         try {
@@ -403,8 +396,6 @@ class MainActivity : AppCompatActivity() {
         return doc.delete()
     }
 
-    // ---------- COPIA (NON esce dalla selezione) ----------
-
     private fun copySelectedFiles(action: String) {
         if (selectedPaths.isEmpty()) return
         clipboardPaths.clear()
@@ -417,8 +408,6 @@ class MainActivity : AppCompatActivity() {
         ).show()
         updateSelectionUI()
     }
-
-    // ---------- MENU ⋮ DELLA SELEZIONE ----------
 
     private fun showSelectionMoreMenu() {
         if (selectedPaths.isEmpty()) return
@@ -546,8 +535,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COMPRIMI MULTI ----------
-
     private fun comprimiZipSelezioneMultipla() {
         if (selectedPaths.isEmpty()) return
 
@@ -566,7 +553,7 @@ class MainActivity : AppCompatActivity() {
         val finalZipName = zipName
         Toast.makeText(this, "Compressione in corso...", Toast.LENGTH_SHORT).show()
 
-        executor.execute {
+        heavyExecutor.execute {
             var ok = false
             var errorMsg = ""
 
@@ -647,8 +634,6 @@ class MainActivity : AppCompatActivity() {
             false
         }
     }
-
-    // ---------- CARD STORAGE ----------
 
     private fun updateStorageCards() {
         storageRow.removeAllViews()
@@ -802,8 +787,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- PERMESSI ----------
-
     private fun hasStoragePermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             Environment.isExternalStorageManager()
@@ -832,8 +815,6 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (hasStoragePermission()) loadDirectory(currentPath)
     }
-
-    // ---------- SAF ----------
 
     private fun requestSaf(onGranted: () -> Unit) {
         if (safTreeUri != null) { onGranted(); return }
@@ -884,8 +865,6 @@ class MainActivity : AppCompatActivity() {
         return doc
     }
 
-    // ---------- LETTURA DIRECTORY ----------
-
     private fun loadDirectory(path: String, resetCategory: Boolean = false) {
         currentPath = path
         txtPath.text = path
@@ -924,25 +903,6 @@ class MainActivity : AppCompatActivity() {
                 allItems = result
                 applyFilters()
                 updatePasteButton()
-
-                executor.execute {
-                    val updated = result.map { item ->
-                        if (item.isDirectory) {
-                            try {
-                                val count = item.file.list()?.let { arr ->
-                                    if (showHidden) arr.size else arr.count { !it.startsWith(".") }
-                                } ?: 0
-                                item.copy(childrenCount = count)
-                            } catch (_: Exception) { item }
-                        } else item
-                    }
-                    mainHandler.post {
-                        if (currentPath == path) {
-                            allItems = updated
-                            applyFilters()
-                        }
-                    }
-                }
             }
         }
     }
@@ -1093,8 +1053,6 @@ class MainActivity : AppCompatActivity() {
             recycler.scrollToPosition(firstVisible)
         }
     }
-
-    // ---------- APERTURA FILE ----------
 
     private fun getCategoryKey(mimeType: String, fileName: String): String {
         return when {
@@ -1274,8 +1232,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- CONDIVIDI ----------
-
     private fun shareFile(item: FileItem) {
         try {
             val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
@@ -1291,8 +1247,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COPIA/INCOLLA (ISTANTANEO COME FILE MANAGER DI SISTEMA) ----------
-
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
             Toast.makeText(this, "Niente negli appunti", Toast.LENGTH_SHORT).show()
@@ -1302,6 +1256,7 @@ class MainActivity : AppCompatActivity() {
         val srcPaths = clipboardPaths.toList()
         val action = clipboardAction
         val dstDir = File(currentPath)
+        val dstPath = dstDir.absolutePath
 
         val existingSrc = srcPaths.filter { File(it).exists() }
         if (existingSrc.isEmpty()) {
@@ -1317,7 +1272,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // 1) UI OTTIMISTICA: mostra SUBITO i file "in arrivo" nella lista
         val optimisticItems = mutableListOf<FileItem>()
         for (srcPath in existingSrc) {
             val src = File(srcPath)
@@ -1340,27 +1294,24 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        // Aggiungi i file ottimistici alla lista visibile
         val currentList = allItems.toMutableList()
         currentList.addAll(optimisticItems)
         allItems = currentList
         applyFilters()
 
-        // 2) Toast breve "in corso" (sparisce da solo)
         Toast.makeText(
             this,
             if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
             Toast.LENGTH_SHORT
         ).show()
 
-        // Pulisci clipboard e selezione SUBITO
+        val finalAction = action ?: "copy"
         clipboardPaths.clear()
         clipboardAction = null
         exitSelectionMode()
         updatePasteButton()
 
-        // 3) COPIA IN BACKGROUND (nessuna UI bloccata)
-        executor.execute {
+        heavyExecutor.execute {
             var copied = 0
             val pool = Executors.newFixedThreadPool(COPY_THREADS)
 
@@ -1372,15 +1323,13 @@ class MainActivity : AppCompatActivity() {
                     var ok = false
                     var renamed = false
 
-                    // CUT: renameTo istantaneo se stesso filesystem
-                    if (action == "cut") {
+                    if (finalAction == "cut") {
                         try {
                             renamed = src.renameTo(dst)
                             ok = renamed
                         } catch (_: Exception) {}
                     }
 
-                    // COPY: copia parallela
                     if (!ok) {
                         try {
                             if (src.isDirectory) {
@@ -1392,7 +1341,6 @@ class MainActivity : AppCompatActivity() {
                         } catch (_: Exception) {}
                     }
 
-                    // Fallback SAF
                     if (!ok) {
                         try { ok = copyViaSaf(src, dst) } catch (_: Exception) {}
                     }
@@ -1400,8 +1348,7 @@ class MainActivity : AppCompatActivity() {
                     if (ok) {
                         copied++
 
-                        // Se era "cut" e rename non è riuscito, cancella l'originale
-                        if (action == "cut" && !renamed && dst.absolutePath != src.absolutePath && src.exists()) {
+                        if (finalAction == "cut" && !renamed && dst.absolutePath != src.absolutePath && src.exists()) {
                             try {
                                 var delOk = if (src.isDirectory) deleteRecursivelyFast(src) else src.delete()
                                 if (!delOk) {
@@ -1415,14 +1362,27 @@ class MainActivity : AppCompatActivity() {
                 pool.shutdown()
             }
 
-            // Scan UNA volta sola
             if (copied > 0) {
-                scanPath(dstDir.absolutePath)
+                scanPath(dstPath)
             }
 
-            // 4) Ricarica la lista per rimuovere i placeholder e mostrare i file reali
+            val finalCopied = copied
+
             mainHandler.post {
-                if (currentPath == dstDir.absolutePath) {
+                if (finalCopied < existingSrc.size) {
+                    val placeholdersToRemove = mutableSetOf<String>()
+                    for ((index, item) in optimisticItems.withIndex()) {
+                        if (index >= finalCopied) {
+                            placeholdersToRemove.add(item.path)
+                        }
+                    }
+                    val realItems = allItems.filter { item ->
+                        !placeholdersToRemove.contains(item.path) || File(item.path).exists()
+                    }
+                    allItems = realItems
+                }
+
+                if (File(dstPath).exists()) {
                     loadDirectory(currentPath)
                 }
             }
@@ -1504,10 +1464,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Copia file ULTRA-VELOCE.
-     * NOTA: niente force() — lasciamo al kernel la scrittura in background.
-     */
     private fun copyFile(src: File, dst: File) {
         dst.parentFile?.mkdirs()
         try {
@@ -1520,7 +1476,6 @@ class MainActivity : AppCompatActivity() {
                     while (position < size) {
                         position += inChannel.transferTo(position, size - position, outChannel)
                     }
-                    // ❌ Niente outChannel.force() — scrittura delegata al kernel
                 }
             }
         } catch (_: Exception) {
@@ -1559,8 +1514,6 @@ class MainActivity : AppCompatActivity() {
         futures.forEach { it.get() }
     }
 
-    // ---------- COMPRIMI SINGOLO ----------
-
     private fun comprimiZip(item: FileItem) {
         val zipName = if (item.isDirectory) "${item.name}.zip" else item.name.substringBeforeLast(".") + ".zip"
         if (File(currentPath, zipName).exists()) {
@@ -1568,7 +1521,7 @@ class MainActivity : AppCompatActivity() {
         }
         Toast.makeText(this, "Compressione in corso...", Toast.LENGTH_SHORT).show()
 
-        executor.execute {
+        heavyExecutor.execute {
             var ok = false
             var errorMsg = ""
 
@@ -1641,8 +1594,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- DECOMPRIMI ----------
-
     private fun decomprimiZip(item: FileItem) {
         if (!item.name.lowercase().endsWith(".zip")) {
             Toast.makeText(this, "Non è un file ZIP", Toast.LENGTH_SHORT).show(); return
@@ -1654,7 +1605,7 @@ class MainActivity : AppCompatActivity() {
         val baseName = item.name.substringBeforeLast(".")
         Toast.makeText(this, "Decompressione in corso...", Toast.LENGTH_SHORT).show()
 
-        executor.execute {
+        heavyExecutor.execute {
             var filesExtracted = 0
             var errorMsg = ""
             try {
@@ -1740,8 +1691,6 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) { false }
     }
 
-    // ---------- RINOMINA ----------
-
     private fun renameItem(item: FileItem) {
         val input = EditText(this)
         input.setText(item.name)
@@ -1770,8 +1719,6 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Annulla", null).show()
     }
-
-    // ---------- MEDIASTORE ----------
 
     private fun updateInMediaStore(oldPath: String, newPath: String) {
         try {
@@ -1805,8 +1752,6 @@ class MainActivity : AppCompatActivity() {
             sendBroadcast(intent)
         } catch (_: Exception) {}
     }
-
-    // ---------- ALTRO ----------
 
     private fun showItemInfo(item: FileItem) {
         val info = buildString {
