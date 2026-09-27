@@ -256,95 +256,6 @@ class MainActivity : AppCompatActivity() {
     // ============================================================
     // === ELIMINA — File diretto, SAF solo se File fallisce ===
     // ============================================================
-    private fun deleteSelectedFiles() {
-    if (selectedPaths.isEmpty()) return
-
-    val count = selectedPaths.size
-    val pathAtStart = currentPath
-
-    AlertDialog.Builder(this)
-        .setTitle("Elimina")
-        .setMessage("Eliminare $count file?")
-        .setPositiveButton("Elimina") { _, _ ->
-            val pathsToDelete = selectedPaths.toList()
-            Toast.makeText(this, "Eliminazione in corso...", Toast.LENGTH_SHORT).show()
-
-            executor.execute {
-                var deleted = 0
-                for (path in pathsToDelete) {
-                    try {
-                        val f = File(path)
-
-                        // 1) File diretto
-                        var ok = if (f.isDirectory) deleteRecursively(f) else f.delete()
-
-                        // 2) SAF solo se File fallisce
-                        if (!ok) {
-                            val doc = getSafDocumentFile(path)
-                            if (doc != null) {
-                                ok = try {
-                                    if (doc.isDirectory) deleteDocumentRecursive(doc) else doc.delete()
-                                } catch (_: Exception) { false }
-                            }
-                        }
-
-                        if (ok) deleted++
-                    } catch (_: Exception) {}
-                }
-
-                val finalDeleted = deleted
-                mainHandler.post {
-                    Toast.makeText(this, "Eliminati $finalDeleted file", Toast.LENGTH_SHORT).show()
-                    exitSelectionMode()
-                    loadDirectory(pathAtStart)
-                }
-            }
-        }
-        .setNegativeButton("Annulla", null)
-        .show()
-}
-
-    private fun deleteRecursively(file: File): Boolean {
-        if (file.isDirectory) {
-            val children = file.listFiles()
-            if (children != null) {
-                for (child in children) {
-                    deleteRecursively(child)
-                }
-            }
-        }
-        return try {
-            file.delete()
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun deleteDocumentRecursive(doc: DocumentFile): Boolean {
-        if (doc.isDirectory) {
-            for (child in doc.listFiles()) {
-                deleteDocumentRecursive(child)
-            }
-        }
-        return doc.delete()
-    }
-
-    private fun copySelectedFiles(action: String) {
-        if (selectedPaths.isEmpty()) return
-        clipboardPaths.clear()
-        clipboardPaths.addAll(selectedPaths)
-        clipboardAction = action
-        Toast.makeText(
-            this,
-            "${selectedPaths.size} file ${if (action == "cut") "tagliati" else "copiati"}",
-            Toast.LENGTH_SHORT
-        ).show()
-        updateSelectionUI()
-    }
-
-    // ============================================================
-    // === COPIA/INCOLLA — File prima, SAF solo come fallback ===
-    // ============================================================
   private fun pasteFromClipboard() {
     if (clipboardPaths.isEmpty()) {
         Toast.makeText(this, "Niente negli appunti", Toast.LENGTH_SHORT).show()
@@ -399,11 +310,17 @@ class MainActivity : AppCompatActivity() {
                 if (action == "cut") {
                     renamed = src.renameTo(dst)
                     ok = renamed
+                    // ⚠️ Verifica REALE: se renameTo mente, dst non esiste
+                    if (ok && !dst.exists()) {
+                        renamed = false
+                        ok = false
+                    }
                 }
                 if (!ok) {
                     if (src.isDirectory) copyDirectoryRecursive(src, dst)
                     else copyFile(src, dst)
-                    ok = true
+                    // ⚠️ Verifica REALE che la copia sia avvenuta
+                    ok = dst.exists()
                 }
             } catch (e: Exception) {
                 errorMsg += "\n${src.name}: ${e.message}"
@@ -419,6 +336,8 @@ class MainActivity : AppCompatActivity() {
                 copied++
                 copiedPaths.add(dst.absolutePath)
 
+                // Se è un "cut" e renameTo NON ha funzionato (perché mente su Huawei),
+                // ora cancella l'originale
                 if (action == "cut" && !renamed && dst.absolutePath != src.absolutePath && src.exists()) {
                     try {
                         if (src.isDirectory) deleteRecursively(src) else src.delete()
@@ -455,7 +374,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 }
-
     private fun generateUniqueName(dir: File, originalName: String): String {
         val dotIndex = originalName.lastIndexOf('.')
         val baseName: String
