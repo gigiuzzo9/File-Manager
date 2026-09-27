@@ -57,9 +57,9 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val REQ_SAF = 1001
-        private const val BUFFER_SIZE = 131072      // 128 KB per copia file
-        private const val ZIP_BUFFER_SIZE = 32768   // 32 KB per ZIP (ottimale)
-        private const val COPY_THREADS = 4          // Thread paralleli copia cartelle
+        private const val BUFFER_SIZE = 262144       // 256 KB (aumentato da 128)
+        private const val ZIP_BUFFER_SIZE = 32768    // 32 KB per ZIP
+        private val COPY_THREADS = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 8)
     }
 
     private lateinit var recycler: RecyclerView
@@ -107,7 +107,7 @@ class MainActivity : AppCompatActivity() {
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // Polling dei volumi di archiviazione (USB, SD)
+    // Polling volumi (USB, SD)
     private val storagePollRunnable = object : Runnable {
         private var lastSnapshot: String = ""
         override fun run() {
@@ -305,20 +305,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- ELIMINA (ISTANTANEO + BACKGROUND) ----------
+    // ---------- ELIMINA (ISTANTANEO + BACKGROUND SILENZIOSO) ----------
 
     private fun deleteSelectedFiles() {
         if (selectedPaths.isEmpty()) return
 
         val count = selectedPaths.size
-        val pathAtStart = currentPath
         val pathsToDelete = selectedPaths.toList()
 
         AlertDialog.Builder(this)
             .setTitle("Elimina")
             .setMessage("Eliminare $count file?")
             .setPositiveButton("Elimina") { _, _ ->
-                // 1) Rimuovi SUBITO dalla lista visibile (l'utente vede sparire all'istante)
+                // 1) Rimuovi SUBITO dalla lista visibile — l'utente vede sparire all'istante
                 val remaining = allItems.filter { !selectedPaths.contains(it.path) }
                 allItems = remaining
                 displayedItems = displayedItems.filter { !selectedPaths.contains(it.path) }
@@ -341,16 +340,12 @@ class MainActivity : AppCompatActivity() {
                             }
                         } catch (_: Exception) {}
                     }
-                    // Nessun toast, nessun reload — il lavoro è invisibile
                 }
             }
             .setNegativeButton("Annulla", null)
             .show()
     }
 
-    /**
-     * Delete ricorsivo VELOCE usando java.nio.file.Files.walk.
-     */
     private fun deleteRecursivelyFast(file: File): Boolean {
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -384,9 +379,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Cancella un documento SAF in UNA SOLA chiamata.
-     */
     private fun deleteViaSafTree(path: String): Boolean {
         val tree = safTreeUri ?: return false
         return try {
@@ -1299,7 +1291,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COPIA/INCOLLA (PARALLELO) ----------
+    // ---------- COPIA/INCOLLA (ISTANTANEO COME FILE MANAGER DI SISTEMA) ----------
 
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
@@ -1325,31 +1317,62 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        Toast.makeText(this, if (action == "cut") "Spostamento in corso..." else "Copia in corso...", Toast.LENGTH_SHORT).show()
+        // 1) UI OTTIMISTICA: mostra SUBITO i file "in arrivo" nella lista
+        val optimisticItems = mutableListOf<FileItem>()
+        for (srcPath in existingSrc) {
+            val src = File(srcPath)
+            var dstName = src.name
+            var dst = File(dstDir, dstName)
+            if (dst.absolutePath == src.absolutePath || dst.exists()) {
+                dstName = generateUniqueName(dstDir, src.name)
+                dst = File(dstDir, dstName)
+            }
+            optimisticItems.add(
+                FileItem(
+                    file = dst,
+                    name = dstName,
+                    path = dst.absolutePath,
+                    isDirectory = src.isDirectory,
+                    size = if (src.isFile) src.length() else 0L,
+                    lastModified = System.currentTimeMillis(),
+                    childrenCount = 0
+                )
+            )
+        }
 
+        // Aggiungi i file ottimistici alla lista visibile
+        val currentList = allItems.toMutableList()
+        currentList.addAll(optimisticItems)
+        allItems = currentList
+        applyFilters()
+
+        // 2) Toast breve "in corso" (sparisce da solo)
+        Toast.makeText(
+            this,
+            if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
+            Toast.LENGTH_SHORT
+        ).show()
+
+        // Pulisci clipboard e selezione SUBITO
+        clipboardPaths.clear()
+        clipboardAction = null
+        exitSelectionMode()
+        updatePasteButton()
+
+        // 3) COPIA IN BACKGROUND (nessuna UI bloccata)
         executor.execute {
             var copied = 0
-            var errorMsg = ""
-
-            // Pool di thread per copia parallela
             val pool = Executors.newFixedThreadPool(COPY_THREADS)
 
             try {
-                for (srcPath in existingSrc) {
+                for ((index, srcPath) in existingSrc.withIndex()) {
                     val src = File(srcPath)
-
-                    var dstName = src.name
-                    var dst = File(dstDir, dstName)
-
-                    if (dst.absolutePath == src.absolutePath || dst.exists()) {
-                        dstName = generateUniqueName(dstDir, src.name)
-                        dst = File(dstDir, dstName)
-                    }
+                    val dst = optimisticItems[index].file
 
                     var ok = false
                     var renamed = false
 
-                    // CUT: prova renameTo (istantaneo)
+                    // CUT: renameTo istantaneo se stesso filesystem
                     if (action == "cut") {
                         try {
                             renamed = src.renameTo(dst)
@@ -1357,7 +1380,7 @@ class MainActivity : AppCompatActivity() {
                         } catch (_: Exception) {}
                     }
 
-                    // COPIA parallela
+                    // COPY: copia parallela
                     if (!ok) {
                         try {
                             if (src.isDirectory) {
@@ -1366,9 +1389,7 @@ class MainActivity : AppCompatActivity() {
                                 copyFile(src, dst)
                             }
                             ok = true
-                        } catch (e: Exception) {
-                            errorMsg += "\n${src.name}: ${e.message}"
-                        }
+                        } catch (_: Exception) {}
                     }
 
                     // Fallback SAF
@@ -1379,6 +1400,7 @@ class MainActivity : AppCompatActivity() {
                     if (ok) {
                         copied++
 
+                        // Se era "cut" e rename non è riuscito, cancella l'originale
                         if (action == "cut" && !renamed && dst.absolutePath != src.absolutePath && src.exists()) {
                             try {
                                 var delOk = if (src.isDirectory) deleteRecursivelyFast(src) else src.delete()
@@ -1393,32 +1415,15 @@ class MainActivity : AppCompatActivity() {
                 pool.shutdown()
             }
 
+            // Scan UNA volta sola
             if (copied > 0) {
                 scanPath(dstDir.absolutePath)
             }
 
-            val finalCopied = copied
-            val finalErr = errorMsg
-            val wasCut = action == "cut"
-
+            // 4) Ricarica la lista per rimuovere i placeholder e mostrare i file reali
             mainHandler.post {
-                if (finalCopied > 0) {
-                    Toast.makeText(
-                        this,
-                        if (wasCut) "Spostati $finalCopied file" else "Copiati $finalCopied file",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    clipboardPaths.clear()
-                    clipboardAction = null
-                    exitSelectionMode()
-                    updatePasteButton()
+                if (currentPath == dstDir.absolutePath) {
                     loadDirectory(currentPath)
-                } else {
-                    AlertDialog.Builder(this)
-                        .setTitle("Errore Incolla")
-                        .setMessage("Nessun file copiato.\n$finalErr")
-                        .setPositiveButton("OK", null)
-                        .show()
                 }
             }
         }
@@ -1500,7 +1505,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Copia file ULTRA-VELOCE usando FileChannel.transferTo (zero-copy del kernel).
+     * Copia file ULTRA-VELOCE.
+     * NOTA: niente force() — lasciamo al kernel la scrittura in background.
      */
     private fun copyFile(src: File, dst: File) {
         dst.parentFile?.mkdirs()
@@ -1514,11 +1520,10 @@ class MainActivity : AppCompatActivity() {
                     while (position < size) {
                         position += inChannel.transferTo(position, size - position, outChannel)
                     }
-                    outChannel.force(false)
+                    // ❌ Niente outChannel.force() — scrittura delegata al kernel
                 }
             }
         } catch (_: Exception) {
-            // Fallback: copia manuale con buffer grande
             FileInputStream(src).use { input ->
                 FileOutputStream(dst).use { output ->
                     val buffer = ByteArray(BUFFER_SIZE)
@@ -1530,13 +1535,9 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        dst.setLastModified(src.lastModified())
+        try { dst.setLastModified(src.lastModified()) } catch (_: Exception) {}
     }
 
-    /**
-     * Copia cartelle in PARALLELO con pool di thread.
-     * 2-4x più veloce di un loop sequenziale.
-     */
     private fun copyDirectoryRecursiveParallel(src: File, dst: File, pool: java.util.concurrent.ExecutorService) {
         if (!dst.exists()) dst.mkdirs()
         val files = src.listFiles() ?: return
@@ -1555,7 +1556,6 @@ class MainActivity : AppCompatActivity() {
                 })
             }
         }
-        // Aspetta che tutti i file di questa cartella siano copiati
         futures.forEach { it.get() }
     }
 
@@ -1632,7 +1632,7 @@ class MainActivity : AppCompatActivity() {
     private fun addFileToZip(file: File, entryName: String, zos: ZipOutputStream) {
         FileInputStream(file).use { fis ->
             zos.putNextEntry(ZipEntry(entryName))
-            val buffer = ByteArray(ZIP_BUFFER_SIZE)  // 32 KB per Deflater
+            val buffer = ByteArray(ZIP_BUFFER_SIZE)
             var length: Int
             while (fis.read(buffer).also { length = it } > 0) {
                 zos.write(buffer, 0, length)
@@ -1677,7 +1677,7 @@ class MainActivity : AppCompatActivity() {
                             var written = false
                             try {
                                 FileOutputStream(outFile).use { fos ->
-                                    val buffer = ByteArray(ZIP_BUFFER_SIZE)  // 32 KB
+                                    val buffer = ByteArray(ZIP_BUFFER_SIZE)
                                     var length: Int
                                     while (zis.read(buffer).also { length = it } > 0) {
                                         fos.write(buffer, 0, length)
