@@ -937,8 +937,11 @@ class MainActivity : AppCompatActivity() {
 
         for (volume in volumes.sortedByDescending { it.length }) {
             if (path.startsWith(volume) || path == volume) {
-                val tree = if (volume == rootInternal) safTreeUri else safTreeMap[volume]
-                    ?: continue
+             val tree = if (volume == rootInternal) {
+    safTreeUri
+} else {
+    safTreeMap[volume] ?: continue
+}
 
                 val rel = path.removePrefix(volume).trimStart('/')
                 var doc = DocumentFile.fromTreeUri(this, tree) ?: continue
