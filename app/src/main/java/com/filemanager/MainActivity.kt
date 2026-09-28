@@ -58,6 +58,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val REQ_SAF = 1001
+        private const val REQ_STORAGE_PERMISSION = 1002
         private const val BUFFER_SIZE = 65536
         private const val ZIP_BUFFER_SIZE = 32768
         private val COPY_THREADS = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(4, 8)
@@ -852,6 +853,56 @@ class MainActivity : AppCompatActivity() {
 
     private fun requestSaf(onGranted: () -> Unit) {
         requestSafForPath(currentPath, onGranted)
+    }
+
+    private fun hasStoragePermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
+                    PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun requestStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                    data = Uri.parse("package:$packageName")
+                })
+            } catch (_: Exception) {
+                try {
+                    startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                } catch (_: Exception) {
+                    Toast.makeText(
+                        this,
+                        "Impossibile aprire le impostazioni di accesso ai file",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+            Toast.makeText(
+                this,
+                "Attiva \"Gestisci tutti i file\" per consentire l'accesso alla memoria",
+                Toast.LENGTH_LONG
+            ).show()
+        } else {
+            requestPermissions(
+                arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE),
+                REQ_STORAGE_PERMISSION
+            )
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_STORAGE_PERMISSION && hasStoragePermission()) {
+            loadDirectory(currentPath)
+        }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
