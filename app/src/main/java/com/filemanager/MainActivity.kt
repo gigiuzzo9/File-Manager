@@ -62,6 +62,7 @@ class MainActivity : AppCompatActivity() {
         private const val ZIP_BUFFER_SIZE = 32768
         private val COPY_THREADS = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(4, 8)
         private const val PREFS_SAF_MAP = "saf_tree_uris_map"
+        private const val PREFS_SAF_INTERNAL_REQUESTED = "saf_requested_internal"
     }
 
     private lateinit var recycler: RecyclerView
@@ -153,7 +154,6 @@ class MainActivity : AppCompatActivity() {
 
         currentPath = rootInternal
 
-        // Carica la mappa dei permessi SAF persistenti
         loadSafTreeUris()
 
         recycler = findViewById(R.id.recyclerFiles)
@@ -219,6 +219,16 @@ class MainActivity : AppCompatActivity() {
 
         if (hasStoragePermission()) {
             loadDirectory(currentPath)
+
+            // SAF automatico sulla memoria interna al primo avvio
+            if (!hasSafFor(rootInternal) && !prefs.getBoolean(PREFS_SAF_INTERNAL_REQUESTED, false)) {
+                prefs.edit().putBoolean(PREFS_SAF_INTERNAL_REQUESTED, true).apply()
+                requestSafForPath(rootInternal) {
+                    Toast.makeText(this, "Permesso completo concesso", Toast.LENGTH_SHORT).show()
+                    updateStorageCards()
+                    loadDirectory(currentPath)
+                }
+            }
         }
         updateStorageCards()
         updatePasteButton()
@@ -248,7 +258,6 @@ class MainActivity : AppCompatActivity() {
                 val obj = arr.getJSONObject(i)
                 val path = obj.getString("path")
                 val uri = Uri.parse(obj.getString("uri"))
-                // Verifica che il permesso sia ancora valido
                 val hasPerm = try {
                     contentResolver.persistedUriPermissions.any {
                         it.uri == uri && it.isReadPermission && it.isWritePermission
@@ -272,18 +281,11 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
-    /**
-     * Registra un treeUri per un determinato path radice di volume.
-     * Il path viene normalizzato: es. /storage/XXXX-XXXX per una USB.
-     */
     private fun registerSafTreeUri(rootPathForVolume: String, uri: Uri) {
         safTreeUris[rootPathForVolume] = uri
         saveSafTreeUris()
     }
 
-    /**
-     * Restituisce il treeUri SAF più specifico che copre il path richiesto.
-     */
     private fun getSafTreeFor(path: String): Uri? {
         var best: Pair<String, Uri>? = null
         for ((basePath, uri) in safTreeUris) {
@@ -296,14 +298,11 @@ class MainActivity : AppCompatActivity() {
         return best?.second
     }
 
-    /**
-     * Restituisce il path radice del volume SAF più specifico per il path.
-     */
     private fun getSafBaseFor(path: String): String? {
         var best: String? = null
         for (basePath in safTreeUris.keys) {
             if (path == basePath || path.startsWith("$basePath/")) {
-                if (best == null || basePath.length > best.length) best = basePath
+                if (best == null || basePath.length > best!!.length) best = basePath
             }
         }
         return best
@@ -317,19 +316,12 @@ class MainActivity : AppCompatActivity() {
         return path == rootInternal || path.startsWith("$rootInternal/")
     }
 
-    /**
-     * Restituisce il path radice del volume che contiene `path`.
-     * Per la memoria interna: /storage/emulated/0
-     * Per una USB: /storage/XXXX-XXXX
-     */
     private fun getVolumeRootFor(path: String): String {
         if (isInternalPath(path)) return rootInternal
-        // USB: /storage/UUID/...
         val parts = path.trimStart('/').split('/')
         if (parts.size >= 2 && parts[0] == "storage") {
             return "/storage/${parts[1]}"
         }
-        // Fallback
         val f = File(path)
         var cur: File? = f
         while (cur != null && cur.parentFile != null &&
@@ -341,16 +333,11 @@ class MainActivity : AppCompatActivity() {
         return cur?.absolutePath ?: path
     }
 
-    /**
-     * Chiede il permesso SAF per la root del volume che contiene `path`.
-     * Se `onDenied` è impostato, viene chiamato se l'utente annulla.
-     */
     private fun requestSafForPath(path: String, onDenied: (() -> Unit)? = null) {
         val volumeRoot = getVolumeRootFor(path)
         pendingSafPath = volumeRoot
         pendingSafOnDenied = onDenied
         pendingSafAction = {
-            // Dopo il grant, ricarica la directory corrente se siamo nel volume
             if (currentPath == volumeRoot || currentPath.startsWith("$volumeRoot/")) {
                 loadDirectory(currentPath)
             } else if (currentPath == path || currentPath.startsWith("$path/")) {
@@ -371,12 +358,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Costruisce l'Intent per ACTION_OPEN_DOCUMENT_TREE, tentando di
-     * posizionare il picker direttamente sulla root del volume.
-     */
     private fun buildOpenDocumentTreeIntent(volumeRoot: String): Intent {
-        // Tentativo 1: usa StorageVolume.createOpenDocumentTreeIntent() (API 29+)
+        // API 29+: usa StorageVolume.createOpenDocumentTreeIntent() → picker già sulla root
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             try {
                 val sm = getSystemService(STORAGE_SERVICE) as StorageManager
@@ -391,7 +374,7 @@ class MainActivity : AppCompatActivity() {
             } catch (_: Exception) {}
         }
 
-        // Tentativo 2: EXTRA_INITIAL_URI con URI esternalstorage
+        // Fallback: EXTRA_INITIAL_URI con URI esternalstorage
         val fallback = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
@@ -421,28 +404,52 @@ class MainActivity : AppCompatActivity() {
                 pendingSafOnDenied = null
                 return
             }
-            try {
-                contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                )
-                val volumeRoot = pendingSafPath ?: rootInternal
-                registerSafTreeUri(volumeRoot, uri)
-                Toast.makeText(this, "Permesso concesso", Toast.LENGTH_SHORT).show()
 
-                val action = pendingSafAction
-                pendingSafPath = null
-                pendingSafAction = null
-                pendingSafOnDenied = null
-                action?.invoke()
-            } catch (e: Exception) {
-                Toast.makeText(this, "Errore permesso: ${e.message}", Toast.LENGTH_LONG).show()
-                pendingSafPath = null
-                pendingSafAction = null
-                pendingSafOnDenied = null
+            val volumeRoot = pendingSafPath ?: rootInternal
+
+            // Verifica che l'utente abbia selezionato ESATTAMENTE la root del volume
+            val selectedDocId = try {
+                DocumentsContract.getTreeDocumentId(uri)
+            } catch (_: Exception) { null }
+
+            val expectedDocId = when {
+                volumeRoot == rootInternal -> "primary:"
+                else -> {
+                    val uuid = volumeRoot.substringAfterLast('/')
+                    "$uuid:"
+                }
             }
+
+            if (selectedDocId != null && !selectedDocId.equals(expectedDocId, ignoreCase = true)) {
+                // Sottocartella selezionata: avvisa e fai riprovare
+                AlertDialog.Builder(this)
+                    .setTitle("Seleziona la root")
+                    .setMessage(
+                        "Hai selezionato una sottocartella.\n\n" +
+                        "Per accedere a TUTTO il volume devi selezionare la cartella " +
+                        "più in alto (la root).\n\n" +
+                        "Vuoi riprovare?"
+                    )
+                    .setPositiveButton("Riprova") { _, _ ->
+                        pendingSafPath = null
+                        pendingSafAction = null
+                        pendingSafOnDenied = null
+                        requestSafForPath(volumeRoot)
+                    }
+                    .setNegativeButton("Annulla") { _, _ ->
+                        val denied = pendingSafOnDenied
+                        pendingSafPath = null
+                        pendingSafAction = null
+                        pendingSafOnDenied = null
+                        denied?.invoke()
+                    }
+                    .setCancelable(false)
+                    .show()
+                return
+            }
+
+            acceptSafPermission(uri, volumeRoot)
         } else {
-            // Utente ha annullato
             val denied = pendingSafOnDenied
             pendingSafPath = null
             pendingSafAction = null
@@ -452,22 +459,34 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Apre la cartella `path` assicurandosi che ci sia il permesso SAF.
-     * Se manca, lo chiede e ricarica dopo il grant.
-     */
-    private fun openDirectoryWithSafCheck(path: String) {
-        if (isInternalPath(path) && hasSafFor(rootInternal)) {
-            loadDirectory(path)
-            return
+    private fun acceptSafPermission(uri: Uri, volumeRoot: String) {
+        try {
+            contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            registerSafTreeUri(volumeRoot, uri)
+            Toast.makeText(this, "Permesso concesso", Toast.LENGTH_SHORT).show()
+
+            val action = pendingSafAction
+            pendingSafPath = null
+            pendingSafAction = null
+            pendingSafOnDenied = null
+            action?.invoke()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Errore permesso: ${e.message}", Toast.LENGTH_LONG).show()
+            pendingSafPath = null
+            pendingSafAction = null
+            pendingSafOnDenied = null
         }
+    }
+
+    private fun openDirectoryWithSafCheck(path: String) {
         if (hasSafFor(path)) {
             loadDirectory(path)
             return
         }
-        // Manca il permesso: chiedilo
         requestSafForPath(path) {
-            // denied -> fallback alla root interna
             Toast.makeText(this, "Permesso necessario per accedere a questo volume", Toast.LENGTH_LONG).show()
             loadDirectory(rootInternal, resetCategory = true)
         }
@@ -563,7 +582,10 @@ class MainActivity : AppCompatActivity() {
                     for (path in pathsToDelete) {
                         try {
                             val f = File(path)
-                            if (!f.exists()) continue
+                            if (!f.exists()) {
+                                deleteViaSafTree(path)
+                                continue
+                            }
 
                             var ok = try {
                                 if (f.isDirectory) deleteRecursivelyFast(f) else f.delete()
@@ -614,9 +636,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Elimina un path tramite SAF, scegliendo il treeUri più specifico.
-     */
     private fun deleteViaSafTree(path: String): Boolean {
         val basePath = getSafBaseFor(path) ?: return false
         val tree = safTreeUris[basePath] ?: return false
@@ -1005,7 +1024,6 @@ class MainActivity : AppCompatActivity() {
             if (!dir.exists() || !dir.isDirectory) {
                 Toast.makeText(this, "Volume non accessibile", Toast.LENGTH_SHORT).show(); return
             }
-            // Apri sempre con check SAF: se manca il permesso, lo chiede
             openDirectoryWithSafCheck(path)
         } catch (e: Exception) {
             Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
@@ -1041,9 +1059,6 @@ class MainActivity : AppCompatActivity() {
         if (hasStoragePermission()) loadDirectory(currentPath)
     }
 
-    /**
-     * Restituisce il DocumentFile per un path, usando il treeUri corretto.
-     */
     private fun getSafDocumentFile(path: String): DocumentFile? {
         val basePath = getSafBaseFor(path) ?: return null
         val tree = safTreeUris[basePath] ?: return null
@@ -1067,7 +1082,6 @@ class MainActivity : AppCompatActivity() {
         executor.execute {
             val dir = File(path)
             val result: List<FileItem>? = if (!dir.exists() || !dir.isDirectory) {
-                // Prova SAF fallback per listare
                 listDirViaSaf(path)
             } else {
                 val files = dir.listFiles()
@@ -1111,9 +1125,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Lista una directory tramite SAF quando File.listFiles() fallisce.
-     */
     private fun listDirViaSaf(path: String): List<FileItem>? {
         val doc = getSafDocumentFile(path) ?: return null
         if (!doc.isDirectory) return null
@@ -2041,7 +2052,6 @@ class MainActivity : AppCompatActivity() {
                     }
                 } catch (_: Exception) {}
 
-                // Fallback SAF: usa il treeUri corretto per il path
                 val doc = getSafDocumentFile(item.path)
                 if (doc != null && doc.renameTo(newName)) {
                     Toast.makeText(this, "Rinominato (SAF)", Toast.LENGTH_SHORT).show()
@@ -2049,7 +2059,6 @@ class MainActivity : AppCompatActivity() {
                     return@setPositiveButton
                 }
 
-                // Prova a chiedere il permesso se manca
                 if (!hasSafFor(item.path)) {
                     requestSafForPath(item.path) {
                         Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
@@ -2130,7 +2139,6 @@ class MainActivity : AppCompatActivity() {
                     return@setPositiveButton
                 }
 
-                // Prova a chiedere il permesso SAF se manca
                 if (!hasSafFor(currentPath)) {
                     requestSafForPath(currentPath) {
                         Toast.makeText(this, "Impossibile creare", Toast.LENGTH_SHORT).show()
@@ -2174,6 +2182,7 @@ class MainActivity : AppCompatActivity() {
         options.add(if (showHidden) "Nascondi file nascosti" else "Mostra file nascosti")
         options.add("Rinnova permesso scrittura")
         options.add("Rimuovi tutti i permessi SAF")
+        options.add("Richiedi di nuovo permesso memoria interna")
 
         AlertDialog.Builder(this)
             .setTitle("Impostazioni")
@@ -2186,7 +2195,6 @@ class MainActivity : AppCompatActivity() {
                         loadDirectory(currentPath)
                     }
                     2 -> {
-                        // Rinnova il permesso per il volume corrente
                         val volumeRoot = getVolumeRootFor(currentPath)
                         safTreeUris.remove(volumeRoot)
                         saveSafTreeUris()
@@ -2195,7 +2203,6 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                     3 -> {
-                        // Rimuovi TUTTI i permessi SAF
                         try {
                             for (perm in contentResolver.persistedUriPermissions) {
                                 contentResolver.releasePersistableUriPermission(
@@ -2206,8 +2213,17 @@ class MainActivity : AppCompatActivity() {
                         } catch (_: Exception) {}
                         safTreeUris.clear()
                         saveSafTreeUris()
+                        prefs.edit().remove(PREFS_SAF_INTERNAL_REQUESTED).apply()
                         Toast.makeText(this, "Permessi rimossi", Toast.LENGTH_SHORT).show()
                         loadDirectory(rootInternal, resetCategory = true)
+                    }
+                    4 -> {
+                        prefs.edit().remove(PREFS_SAF_INTERNAL_REQUESTED).apply()
+                        safTreeUris.remove(rootInternal)
+                        saveSafTreeUris()
+                        requestSafForPath(rootInternal) {
+                            Toast.makeText(this, "Permesso rinnovato", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }
             }.show()
@@ -2229,7 +2245,6 @@ class MainActivity : AppCompatActivity() {
         if (parent != null && parent.startsWith(rootInternal)) {
             openDirectoryWithSafCheck(parent)
         } else if (currentPath.startsWith("/storage/") || currentPath.startsWith("/mnt/")) {
-            // Se siamo alla root di un volume USB, torna alla memoria interna
             val volumeRoot = getVolumeRootFor(currentPath)
             if (currentPath == volumeRoot) {
                 loadDirectory(rootInternal, resetCategory = true)
