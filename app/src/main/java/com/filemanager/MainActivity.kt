@@ -502,8 +502,7 @@ class MainActivity : AppCompatActivity() {
         var doc = DocumentFile.fromTreeUri(this, tree) ?: return null
         if (rel.isEmpty()) return doc
         for (part in rel.split("/").filter { it.isNotEmpty() }) {
-            val next = doc.findFile(part) ?: return null
-            doc = next
+            doc = doc.findFile(part) ?: return null
         }
         return doc
     }
@@ -1122,8 +1121,8 @@ class MainActivity : AppCompatActivity() {
         targetName: String
     ): Boolean {
         return try {
-            val newDoc: DocumentFile = dstParent.createFile(getMimeType(targetName), targetName) ?: return false
-            val out: OutputStream = contentResolver.openOutputStream(newDoc.uri) ?: return false
+            val newDoc = dstParent.createFile(getMimeType(targetName), targetName) ?: return false
+            val out = contentResolver.openOutputStream(newDoc.uri) ?: return false
             val input: InputStream = if (srcDoc != null) {
                 contentResolver.openInputStream(srcDoc.uri) ?: return false
             } else {
@@ -1144,34 +1143,37 @@ class MainActivity : AppCompatActivity() {
     private fun copySafDirRecursive(srcDoc: DocumentFile?, srcFile: File, dstDoc: DocumentFile) {
         // 1) Sorgente via SAF
         if (srcDoc != null) {
-            val doc: DocumentFile = srcDoc
-            val children: Array<DocumentFile> = doc.listFiles()
+            val doc = srcDoc
+            val children = doc.listFiles()
             for (child in children) {
-                val safeChild: DocumentFile = child
-                val name: String = safeChild.name ?: continue
-                if (safeChild.isDirectory) {
-                    val sub: DocumentFile = dstDoc.createDirectory(name) ?: continue
-                    copySafDirRecursive(safeChild, File(srcFile, name), sub)
+                val name = child.name ?: continue
+                if (child.isDirectory) {
+                    val sub = dstDoc.createDirectory(name)
+                    if (sub != null) {
+                        copySafDirRecursive(child, File(srcFile, name), sub)
+                    }
                 } else {
-                    val out: DocumentFile = dstDoc.createFile(getMimeType(name), name) ?: continue
-                    try {
-                        val ins: InputStream? = contentResolver.openInputStream(safeChild.uri)
-                        if (ins != null) {
-                            ins.use { input ->
-                                val outs: OutputStream? = contentResolver.openOutputStream(out.uri)
-                                if (outs != null) {
-                                    outs.use { output ->
-                                        val buf = ByteArray(BUFFER_SIZE)
-                                        var len: Int
-                                        while (input.read(buf).also { len = it } > 0) {
-                                            output.write(buf, 0, len)
+                    val out = dstDoc.createFile(getMimeType(name), name)
+                    if (out != null) {
+                        try {
+                            val ins = contentResolver.openInputStream(child.uri)
+                            if (ins != null) {
+                                ins.use { input ->
+                                    val outs = contentResolver.openOutputStream(out.uri)
+                                    if (outs != null) {
+                                        outs.use { output ->
+                                            val buf = ByteArray(BUFFER_SIZE)
+                                            var len: Int
+                                            while (input.read(buf).also { len = it } > 0) {
+                                                output.write(buf, 0, len)
+                                            }
+                                            output.flush()
                                         }
-                                        output.flush()
                                     }
                                 }
                             }
-                        }
-                    } catch (_: Exception) {}
+                        } catch (_: Exception) {}
+                    }
                 }
             }
             return
@@ -1181,8 +1183,10 @@ class MainActivity : AppCompatActivity() {
         val files = srcFile.listFiles() ?: return
         for (f in files) {
             if (f.isDirectory) {
-                val sub: DocumentFile = dstDoc.createDirectory(f.name) ?: continue
-                copySafDirRecursive(null, f, sub)
+                val sub = dstDoc.createDirectory(f.name)
+                if (sub != null) {
+                    copySafDirRecursive(null, f, sub)
+                }
             } else {
                 copySafFileTo(null, f, dstDoc, f.name)
             }
@@ -1207,7 +1211,7 @@ class MainActivity : AppCompatActivity() {
     private fun copyFileViaSaf(src: File, dst: File): Boolean {
         return try {
             val parentDoc = getSafDocumentFile(dst.parentFile?.absolutePath ?: "") ?: return false
-            val newFile: DocumentFile = parentDoc.createFile(getMimeType(src.name), src.name) ?: return false
+            val newFile = parentDoc.createFile(getMimeType(src.name), src.name) ?: return false
             contentResolver.openOutputStream(newFile.uri)?.use { out ->
                 FileInputStream(src).use { ins ->
                     val buf = ByteArray(BUFFER_SIZE)
@@ -1224,7 +1228,7 @@ class MainActivity : AppCompatActivity() {
         return try {
             val parentDir = dst.parentFile ?: return false
             val parentDoc = getSafDocumentFile(parentDir.absolutePath) ?: return false
-            val newDir: DocumentFile = parentDoc.findFile(dst.name) ?: parentDoc.createDirectory(dst.name) ?: return false
+            val newDir = parentDoc.findFile(dst.name) ?: parentDoc.createDirectory(dst.name) ?: return false
             copySafDirRecursive(null, src, newDir)
             true
         } catch (_: Exception) { false }
@@ -1354,17 +1358,15 @@ class MainActivity : AppCompatActivity() {
     private fun comprimiZipMultiViaSaf(pathsToZip: List<String>, zipName: String): Boolean {
         return try {
             val parentDoc = getSafDocumentFile(currentPath) ?: return false
-            val newZipDoc: DocumentFile = parentDoc.createFile("application/zip", zipName) ?: return false
+            val newZipDoc = parentDoc.createFile("application/zip", zipName) ?: return false
             val outputStream = contentResolver.openOutputStream(newZipDoc.uri) ?: return false
             ZipOutputStream(outputStream).use { zos ->
                 for (path in pathsToZip) {
                     val srcDoc = getSafDocumentFile(path)
                     val srcFile = File(path)
                     if (srcDoc != null) {
-                        val d: DocumentFile = srcDoc
-                        val nm: String = d.name ?: "file"
-                        if (d.isDirectory) addSafDirToZip(d, nm, zos)
-                        else addSafFileToZip(d, nm, zos)
+                        if (srcDoc.isDirectory) addSafDirToZip(srcDoc, srcDoc.name ?: "dir", zos)
+                        else addSafFileToZip(srcDoc, srcDoc.name ?: "file", zos)
                     } else if (srcFile.exists()) {
                         if (srcFile.isDirectory) addDirectoryToZip(srcFile, srcFile.name, zos)
                         else addFileToZip(srcFile, srcFile.name, zos)
@@ -1386,15 +1388,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun addSafFileToZip(doc: DocumentFile, entryName: String, zos: ZipOutputStream) {
         try {
-            val ins = contentResolver.openInputStream(doc.uri)
-            if (ins != null) {
-                ins.use { input ->
-                    zos.putNextEntry(ZipEntry(entryName))
-                    val buf = ByteArray(ZIP_BUFFER_SIZE)
-                    var len: Int
-                    while (input.read(buf).also { len = it } > 0) zos.write(buf, 0, len)
-                    zos.closeEntry()
-                }
+            contentResolver.openInputStream(doc.uri)?.use { ins ->
+                zos.putNextEntry(ZipEntry(entryName))
+                val buf = ByteArray(ZIP_BUFFER_SIZE)
+                var len: Int
+                while (ins.read(buf).also { len = it } > 0) zos.write(buf, 0, len)
+                zos.closeEntry()
             }
         } catch (_: Exception) {}
     }
@@ -1431,9 +1430,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 val srcDoc = if (useFileApi(item.path)) null else getSafDocumentFile(item.path)
                 val zipInput: InputStream = if (srcDoc != null) {
-                    val doc: DocumentFile = srcDoc
-                    val ins = contentResolver.openInputStream(doc.uri)
-                    ins ?: throw Exception("Impossibile aprire ZIP")
+                    contentResolver.openInputStream(srcDoc.uri) ?: throw Exception("Impossibile aprire ZIP")
                 } else {
                     FileInputStream(item.file)
                 }
@@ -1497,27 +1494,26 @@ class MainActivity : AppCompatActivity() {
         zis: ZipInputStream
     ): Boolean {
         return try {
-            var base: DocumentFile? = parentDoc.findFile(baseName)
-            if (base == null) base = parentDoc.createDirectory(baseName)
-            val safeBase: DocumentFile = base ?: return false
+            var base = parentDoc.findFile(baseName) ?: parentDoc.createDirectory(baseName)
+            if (base == null) return false
 
             val parts = entryName.split("/").filter { it.isNotEmpty() }
             if (parts.isEmpty()) return false
             val fileName = parts.last()
             val folders = parts.dropLast(1)
-            var cur: DocumentFile = safeBase
+            var cur = base
             for (folder in folders) {
-                var next: DocumentFile? = cur.findFile(folder)
+                var next = cur.findFile(folder)
                 if (next == null) next = cur.createDirectory(folder)
-                val safeNext: DocumentFile = next ?: return false
-                cur = safeNext
+                if (next == null) return false
+                cur = next
             }
             if (isDirectory) {
                 cur.createDirectory(fileName)
                 return true
             }
-            val newFile: DocumentFile = cur.createFile(getMimeType(fileName), fileName) ?: return false
-            val out: OutputStream = contentResolver.openOutputStream(newFile.uri) ?: return false
+            val newFile = cur.createFile(getMimeType(fileName), fileName) ?: return false
+            val out = contentResolver.openOutputStream(newFile.uri) ?: return false
             out.use { os ->
                 val buf = ByteArray(ZIP_BUFFER_SIZE)
                 var len: Int
