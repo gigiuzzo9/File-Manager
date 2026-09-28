@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -251,7 +252,6 @@ class MainActivity : AppCompatActivity() {
         return path == rootInternal || path.startsWith("$rootInternal/")
     }
 
-    /** TRUE se dobbiamo usare File API; FALSE se dobbiamo usare SOLO SAF. */
     private fun useFileApi(path: String): Boolean = isInternalPath(path)
 
     // ============================================================
@@ -507,10 +507,6 @@ class MainActivity : AppCompatActivity() {
         return doc
     }
 
-    /**
-     * Legge la dimensione reale di un file via ContentResolver
-     * (DocumentFile.length() a volte ritorna 0 su USB).
-     */
     private fun readSizeFromUri(uri: Uri): Long {
         try {
             contentResolver.query(uri, null, null, null, null)?.use { c ->
@@ -886,7 +882,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // COPY / PASTE (internal = File, USB = SAF)
+    // COPY / PASTE
     // ============================================================
 
     private fun copySelectedFiles(action: String) {
@@ -985,7 +981,6 @@ class MainActivity : AppCompatActivity() {
                         } catch (e: Exception) { errorMsg += "\n${src.name}: ${e.message}" }
                     }
 
-                    // Fallback SAF se src è su USB
                     if (!ok && !useFileApi(srcPath)) {
                         try {
                             ok = if (src.isDirectory) copyDirectoryViaSaf(src, dst) else copyFileViaSaf(src, dst)
@@ -1025,9 +1020,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Incolla verso una destinazione USB: usa SOLO SAF.
-     */
     private fun pasteToSaf(srcPaths: List<String>, action: String?, dstPath: String) {
         Toast.makeText(this,
             if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
@@ -1060,7 +1052,6 @@ class MainActivity : AppCompatActivity() {
 
                     val displayName = srcDoc?.name ?: srcFile.name
 
-                    // Se esiste già, rinomina
                     var targetName = displayName
                     if (dstParentDoc.findFile(targetName) != null) {
                         targetName = generateUniqueNameSaf(dstParentDoc, displayName)
@@ -1080,7 +1071,6 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     if (copied > 0 && finalAction == "cut") {
-                        // Elimina l'originale solo se l'operazione è riuscita
                         try {
                             if (srcDoc != null) deleteDocumentRecursive(srcDoc)
                             else if (srcFile.exists() && useFileApi(srcPath)) {
@@ -1132,7 +1122,7 @@ class MainActivity : AppCompatActivity() {
     ): Boolean {
         return try {
             val newDoc = dstParent.createFile(getMimeType(targetName), targetName) ?: return false
-            val out = contentResolver.openOutputStream(newDoc.uri) ?: return false
+            val out: OutputStream = contentResolver.openOutputStream(newDoc.uri) ?: return false
             val input: InputStream = if (srcDoc != null) {
                 contentResolver.openInputStream(srcDoc.uri) ?: return false
             } else {
@@ -1153,7 +1143,9 @@ class MainActivity : AppCompatActivity() {
     private fun copySafDirRecursive(srcDoc: DocumentFile?, srcFile: File, dstDoc: DocumentFile) {
         // 1) Sorgente via SAF
         if (srcDoc != null) {
-            for (child in srcDoc.listFiles()) {
+            val doc: DocumentFile = srcDoc
+            val children: Array<DocumentFile> = doc.listFiles()
+            for (child in children) {
                 val name = child.name ?: continue
                 if (child.isDirectory) {
                     val sub = dstDoc.createDirectory(name) ?: continue
@@ -1222,7 +1214,7 @@ class MainActivity : AppCompatActivity() {
         return try {
             val parentDir = dst.parentFile ?: return false
             val parentDoc = getSafDocumentFile(parentDir.absolutePath) ?: return false
-            var newDir = parentDoc.findFile(dst.name) ?: parentDoc.createDirectory(dst.name)
+            val newDir = parentDoc.findFile(dst.name) ?: parentDoc.createDirectory(dst.name)
             if (newDir == null) return false
             copySafDirRecursive(null, src, newDir)
             true
@@ -1454,7 +1446,6 @@ class MainActivity : AppCompatActivity() {
                                 }
                             }
                         } else {
-                            // SAF
                             val parentDoc = getSafDocumentFile(currentPath)
                             if (parentDoc != null) {
                                 val ok = writeEntryToSaf(parentDoc, baseName, entryName, entry.isDirectory, zis)
@@ -1490,7 +1481,6 @@ class MainActivity : AppCompatActivity() {
         zis: ZipInputStream
     ): Boolean {
         return try {
-            // Crea (se serve) la cartella base
             var base = parentDoc.findFile(baseName) ?: parentDoc.createDirectory(baseName)
             if (base == null) return false
 
@@ -1585,20 +1575,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun scanPath(path: String) {
         try {
-            if (useFileApi(path)) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val f = File(path)
-                    if (f.isFile) MediaStore.scanFile(contentResolver, f)
-                    else f.listFiles()?.forEach { c ->
-                        if (c.isFile) try { MediaStore.scanFile(contentResolver, c) } catch (_: Exception) {}
+            if (!useFileApi(path)) return
+            val f = File(path)
+            if (f.isFile) {
+                MediaScannerConnection.scanFile(
+                    this, arrayOf(f.absolutePath), null, null
+                )
+            } else {
+                f.listFiles()?.forEach { c ->
+                    if (c.isFile) {
+                        try {
+                            MediaScannerConnection.scanFile(
+                                this, arrayOf(c.absolutePath), null, null
+                            )
+                        } catch (_: Exception) {}
                     }
-                } else {
-                    val intent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
-                    intent.data = Uri.fromFile(File(path))
-                    sendBroadcast(intent)
                 }
             }
-            // USB: niente scan (SAF gestisce già)
         } catch (_: Exception) {}
     }
 
@@ -1627,7 +1620,6 @@ class MainActivity : AppCompatActivity() {
                     } catch (_: Exception) {}
                 }
 
-                // USB o fallback: SAF
                 val parent = getSafDocumentFile(currentPath)
                 if (parent != null && parent.createDirectory(name) != null) {
                     Toast.makeText(this, "Cartella creata", Toast.LENGTH_SHORT).show()
