@@ -105,6 +105,10 @@ class MainActivity : AppCompatActivity() {
     private var safTreeUri: Uri? = null
     private var pendingSafAction: (() -> Unit)? = null
 
+    // USB: mappa volume -> SAF tree + path pendente per la richiesta
+    private val safTreeMap = mutableMapOf<String, Uri>()
+    private var pendingSafTargetPath: String? = null
+
     private val executor = Executors.newSingleThreadExecutor()
     private val heavyExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -148,6 +152,16 @@ class MainActivity : AppCompatActivity() {
 
         currentPath = rootInternal
         safTreeUri = prefs.getString("saf_tree_uri", null)?.let { Uri.parse(it) }
+
+        // USB: carica i SAF tree salvati per i volumi esterni
+        for (key in prefs.all.keys) {
+            if (key.startsWith("saf_tree_/storage/")) {
+                val volumePath = key.removePrefix("saf_tree_")
+                prefs.getString(key, null)?.let { uriStr ->
+                    safTreeMap[volumePath] = Uri.parse(uriStr)
+                }
+            }
+        }
 
         recycler = findViewById(R.id.recyclerFiles)
         txtPath = findViewById(R.id.txtPath)
@@ -373,19 +387,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // USB: deleteViaSafTree usa la mappa dei tree per supportare la USB
     private fun deleteViaSafTree(path: String): Boolean {
-        val tree = safTreeUri ?: return false
-        return try {
-            val rel = path.removePrefix(rootInternal).trimStart('/')
-            if (rel.isEmpty()) return false
+        try {
+            val volumes = listOf(rootInternal) + safTreeMap.keys.toList()
 
-            val treeDocId = DocumentsContract.getTreeDocumentId(tree)
-            val docId = "$treeDocId/$rel"
-            val docUri = DocumentsContract.buildDocumentUriUsingTree(tree, docId)
-            DocumentsContract.deleteDocument(contentResolver, docUri)
+            for (volume in volumes.sortedByDescending { it.length }) {
+                if (path.startsWith(volume) || path == volume) {
+                    val tree = if (volume == rootInternal) safTreeUri else safTreeMap[volume]
+                        ?: continue
+
+                    val rel = path.removePrefix(volume).trimStart('/')
+                    if (rel.isEmpty()) return false
+
+                    val treeDocId = DocumentsContract.getTreeDocumentId(tree)
+                    val docId = "$treeDocId/$rel"
+                    val docUri = DocumentsContract.buildDocumentUriUsingTree(tree, docId)
+                    DocumentsContract.deleteDocument(contentResolver, docUri)
+                    return true
+                }
+            }
         } catch (_: Exception) {
-            false
+            return false
         }
+        return false
     }
 
     private fun deleteDocumentRecursive(doc: DocumentFile): Boolean {
@@ -756,16 +781,38 @@ class MainActivity : AppCompatActivity() {
         return card
     }
 
+    // USB: controlla se possiamo scrivere; se no, chiedi SAF
     private fun tryAccessExternalVolume(path: String) {
         try {
             val dir = File(path)
             if (!dir.exists() || !dir.isDirectory) {
                 Toast.makeText(this, "Volume non accessibile", Toast.LENGTH_SHORT).show(); return
             }
+
+            // Verifica se possiamo scrivere (USB richiede SAF)
+            val volumePath = extractVolumePath(path)
+            val hasSaf = volumePath != null && safTreeMap.containsKey(volumePath)
+
+            val canWrite = try {
+                val testFile = File(path, ".write_test_tmp")
+                val ok = testFile.createNewFile()
+                if (ok) testFile.delete()
+                ok
+            } catch (_: Exception) {
+                false
+            }
+
+            if (!canWrite && !hasSaf) {
+                Toast.makeText(this, "Concedi l'accesso alla USB per copiare/eliminare", Toast.LENGTH_LONG).show()
+                requestSafForPath(path)
+                return
+            }
+
             if (dir.listFiles() == null) {
                 Toast.makeText(this, "Serve il permesso per accedere a questo volume", Toast.LENGTH_LONG).show()
                 requestSafForPath(path); return
             }
+
             activeCategory = null
             searchQuery = ""
             editSearch.setText("")
@@ -775,7 +822,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // USB: ricorda per quale volume stiamo chiedendo il SAF
     private fun requestSafForPath(path: String) {
+        pendingSafTargetPath = path
         try {
             startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -820,6 +869,7 @@ class MainActivity : AppCompatActivity() {
     private fun requestSaf(onGranted: () -> Unit) {
         if (safTreeUri != null) { onGranted(); return }
         pendingSafAction = onGranted
+        pendingSafTargetPath = null
         val uri = Uri.parse("content://com.android.externalstorage.documents/root/primary")
         try {
             startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
@@ -837,6 +887,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // USB: salva il tree nella mappa se è per un volume esterno
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQ_SAF && resultCode == Activity.RESULT_OK) {
@@ -844,18 +895,65 @@ class MainActivity : AppCompatActivity() {
             try {
                 contentResolver.takePersistableUriPermission(uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                safTreeUri = uri
-                prefs.edit().putString("saf_tree_uri", uri.toString()).apply()
-                Toast.makeText(this, "Permesso concesso", Toast.LENGTH_SHORT).show()
+
+                val targetPath = pendingSafTargetPath
+                val volumePath = if (targetPath != null) extractVolumePath(targetPath) else null
+
+                if (volumePath != null && volumePath != rootInternal) {
+                    // SAF per volume esterno (USB/SD)
+                    safTreeMap[volumePath] = uri
+                    prefs.edit().putString("saf_tree_$volumePath", uri.toString()).apply()
+                    Toast.makeText(this, "Permesso USB concesso", Toast.LENGTH_SHORT).show()
+                } else {
+                    // SAF per memoria interna
+                    safTreeUri = uri
+                    prefs.edit().putString("saf_tree_uri", uri.toString()).apply()
+                    Toast.makeText(this, "Permesso concesso", Toast.LENGTH_SHORT).show()
+                }
+
                 pendingSafAction?.invoke()
             } catch (e: Exception) {
                 Toast.makeText(this, "Errore permesso: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
         pendingSafAction = null
+        pendingSafTargetPath = null
     }
 
+    // USB: estrae il path del volume da un path generico
+    private fun extractVolumePath(path: String): String? {
+        val parts = path.split("/").filter { it.isNotEmpty() }
+        if (parts.size < 2) return null
+        if (parts[0] != "storage") return null
+        if (parts.size >= 3 && parts[1] == "emulated") {
+            return "/storage/${parts[1]}/${parts[2]}"
+        }
+        return "/storage/${parts[1]}"
+    }
+
+    // USB: cerca il tree giusto nella mappa per il path
     private fun getSafDocumentFile(path: String): DocumentFile? {
+        val volumes = listOf(rootInternal) + safTreeMap.keys.toList()
+
+        for (volume in volumes.sortedByDescending { it.length }) {
+            if (path.startsWith(volume) || path == volume) {
+                val tree = if (volume == rootInternal) safTreeUri else safTreeMap[volume]
+                    ?: continue
+
+                val rel = path.removePrefix(volume).trimStart('/')
+                var doc = DocumentFile.fromTreeUri(this, tree) ?: continue
+                if (rel.isEmpty()) return doc
+
+                var found = true
+                for (part in rel.split("/").filter { it.isNotEmpty() }) {
+                    val next = doc?.findFile(part)
+                    if (next == null) { found = false; break }
+                    doc = next
+                }
+                if (found) return doc
+            }
+        }
+
         val tree = safTreeUri ?: return null
         val rel = path.removePrefix(rootInternal).trimStart('/')
         var doc = DocumentFile.fromTreeUri(this, tree) ?: return null
@@ -1286,9 +1384,8 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // 1) UI OTTIMISTICA: crea placeholder e mostrali SUBITO
         val placeholders = mutableListOf<FileItem>()
-        val pendingCopy = mutableListOf<Pair<String, File>>() // srcPath -> dst
+        val pendingCopy = mutableListOf<Pair<String, File>>()
 
         for (srcPath in existingSrc) {
             val src = File(srcPath)
@@ -1312,13 +1409,11 @@ class MainActivity : AppCompatActivity() {
             pendingCopy.add(srcPath to dst)
         }
 
-        // Aggiungi i placeholder alla lista visibile SUBITO
         val currentList = allItems.toMutableList()
         currentList.addAll(placeholders)
         allItems = currentList
         applyFilters()
 
-        // 2) Toast breve
         Toast.makeText(
             this,
             if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
@@ -1331,7 +1426,6 @@ class MainActivity : AppCompatActivity() {
         exitSelectionMode()
         updatePasteButton()
 
-        // 3) COPIA IN BACKGROUND
         heavyExecutor.execute {
             var copied = 0
             var errorMsg = ""
@@ -1418,8 +1512,6 @@ class MainActivity : AppCompatActivity() {
                         .show()
                 }
 
-                // 4) RICARICA la lista SOLO se siamo ancora nella cartella di destinazione
-                //    (il reload rimuove i placeholder e mostra i file reali)
                 if (currentPath == dstPath) {
                     loadDirectory(currentPath)
                 }
