@@ -105,7 +105,6 @@ class MainActivity : AppCompatActivity() {
     private var safTreeUri: Uri? = null
     private var pendingSafAction: (() -> Unit)? = null
 
-    // USB: mappa volume -> SAF tree + path pendente per la richiesta
     private val safTreeMap = mutableMapOf<String, Uri>()
     private var pendingSafTargetPath: String? = null
 
@@ -153,7 +152,6 @@ class MainActivity : AppCompatActivity() {
         currentPath = rootInternal
         safTreeUri = prefs.getString("saf_tree_uri", null)?.let { Uri.parse(it) }
 
-        // USB: carica i SAF tree salvati per i volumi esterni
         for (key in prefs.all.keys) {
             if (key.startsWith("saf_tree_/storage/")) {
                 val volumePath = key.removePrefix("saf_tree_")
@@ -387,15 +385,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // USB: deleteViaSafTree usa la mappa dei tree per supportare la USB
     private fun deleteViaSafTree(path: String): Boolean {
         try {
             val volumes = listOf(rootInternal) + safTreeMap.keys.toList()
 
             for (volume in volumes.sortedByDescending { it.length }) {
                 if (path.startsWith(volume) || path == volume) {
-                    val tree = if (volume == rootInternal) safTreeUri else safTreeMap[volume]
-                        ?: continue
+                    val tree: Uri? = if (volume == rootInternal) {
+                        safTreeUri
+                    } else {
+                        safTreeMap[volume]
+                    }
+                    if (tree == null) continue
 
                     val rel = path.removePrefix(volume).trimStart('/')
                     if (rel.isEmpty()) return false
@@ -781,7 +782,6 @@ class MainActivity : AppCompatActivity() {
         return card
     }
 
-    // USB: controlla se possiamo scrivere; se no, chiedi SAF
     private fun tryAccessExternalVolume(path: String) {
         try {
             val dir = File(path)
@@ -789,7 +789,6 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Volume non accessibile", Toast.LENGTH_SHORT).show(); return
             }
 
-            // Verifica se possiamo scrivere (USB richiede SAF)
             val volumePath = extractVolumePath(path)
             val hasSaf = volumePath != null && safTreeMap.containsKey(volumePath)
 
@@ -822,7 +821,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // USB: ricorda per quale volume stiamo chiedendo il SAF
     private fun requestSafForPath(path: String) {
         pendingSafTargetPath = path
         try {
@@ -887,7 +885,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // USB: salva il tree nella mappa se è per un volume esterno
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQ_SAF && resultCode == Activity.RESULT_OK) {
@@ -900,12 +897,10 @@ class MainActivity : AppCompatActivity() {
                 val volumePath = if (targetPath != null) extractVolumePath(targetPath) else null
 
                 if (volumePath != null && volumePath != rootInternal) {
-                    // SAF per volume esterno (USB/SD)
                     safTreeMap[volumePath] = uri
                     prefs.edit().putString("saf_tree_$volumePath", uri.toString()).apply()
                     Toast.makeText(this, "Permesso USB concesso", Toast.LENGTH_SHORT).show()
                 } else {
-                    // SAF per memoria interna
                     safTreeUri = uri
                     prefs.edit().putString("saf_tree_uri", uri.toString()).apply()
                     Toast.makeText(this, "Permesso concesso", Toast.LENGTH_SHORT).show()
@@ -920,7 +915,6 @@ class MainActivity : AppCompatActivity() {
         pendingSafTargetPath = null
     }
 
-    // USB: estrae il path del volume da un path generico
     private fun extractVolumePath(path: String): String? {
         val parts = path.split("/").filter { it.isNotEmpty() }
         if (parts.size < 2) return null
@@ -931,17 +925,17 @@ class MainActivity : AppCompatActivity() {
         return "/storage/${parts[1]}"
     }
 
-    // USB: cerca il tree giusto nella mappa per il path
     private fun getSafDocumentFile(path: String): DocumentFile? {
         val volumes = listOf(rootInternal) + safTreeMap.keys.toList()
 
         for (volume in volumes.sortedByDescending { it.length }) {
             if (path.startsWith(volume) || path == volume) {
-             val tree = if (volume == rootInternal) {
-    safTreeUri
-} else {
-    safTreeMap[volume] ?: continue
-}
+                val tree: Uri? = if (volume == rootInternal) {
+                    safTreeUri
+                } else {
+                    safTreeMap[volume]
+                }
+                if (tree == null) continue
 
                 val rel = path.removePrefix(volume).trimStart('/')
                 var doc = DocumentFile.fromTreeUri(this, tree) ?: continue
@@ -957,9 +951,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val tree = safTreeUri ?: return null
+        val fallbackTree: Uri = safTreeUri ?: return null
         val rel = path.removePrefix(rootInternal).trimStart('/')
-        var doc = DocumentFile.fromTreeUri(this, tree) ?: return null
+        var doc = DocumentFile.fromTreeUri(this, fallbackTree) ?: return null
         if (rel.isEmpty()) return doc
         for (part in rel.split("/").filter { it.isNotEmpty() }) {
             doc = doc?.findFile(part) ?: return null
@@ -1359,8 +1353,6 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
-
-    // ---------- COPIA/INCOLLA (UI OTTIMISTICA + COPIA IN BACKGROUND) ----------
 
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
