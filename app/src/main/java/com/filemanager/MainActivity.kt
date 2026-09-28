@@ -716,21 +716,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun getVolumePath(vol: StorageVolume): String? {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                val uuid = vol.uuid
-                if (uuid != null) {
-                    val path = "/storage/$uuid"
-                    if (File(path).exists()) return path
-                }
-            } catch (_: Exception) {}
-        }
-        return try {
-            val method = vol.javaClass.getMethod("getPath")
-            method.invoke(vol) as? String
-        } catch (e: Exception) { null }
+   private fun getVolumePath(vol: StorageVolume): String? {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        try {
+            val uuid = vol.uuid
+            if (uuid != null) {
+                // Prova PRIMA /storage/uuid (standard)
+                val p1 = "/storage/$uuid"
+                if (File(p1).exists()) return p1
+                
+                // Prova /mnt/media_rw/uuid (USB su Samsung/Xiaomi)
+                val p2 = "/mnt/media_rw/$uuid"
+                if (File(p2).exists()) return p2
+            }
+        } catch (_: Exception) {}
     }
+    return try {
+        val method = vol.javaClass.getMethod("getPath")
+        method.invoke(vol) as? String
+    } catch (e: Exception) { null }
+}
 
     private fun createStorageCard(vol: StorageVolumeInfo): LinearLayout {
         val density = resources.displayMetrics.density
