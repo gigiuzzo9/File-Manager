@@ -105,6 +105,7 @@ class MainActivity : AppCompatActivity() {
     private var safTreeUri: Uri? = null
     private var pendingSafAction: (() -> Unit)? = null
 
+    // USB: mappe per gestire SAF su volumi esterni
     private val safTreeMap = mutableMapOf<String, Uri>()
     private var pendingSafTargetPath: String? = null
 
@@ -765,17 +766,32 @@ class MainActivity : AppCompatActivity() {
         card.addView(info)
 
         card.setOnClickListener {
-            if (vol.path == rootInternal || vol.path.isEmpty()) {
-                activeCategory = null
-                searchQuery = ""
-                editSearch.setText("")
-                if (vol.path.isEmpty()) {
-                    requestSafForPath(rootInternal)
-                } else {
-                    loadDirectory(rootInternal, resetCategory = true)
-                }
+            activeCategory = null
+            searchQuery = ""
+            editSearch.setText("")
+
+            val path = vol.path
+            if (path == rootInternal) {
+                loadDirectory(rootInternal, resetCategory = true)
+            } else if (path.isNotEmpty()) {
+                tryAccessExternalVolume(path)
             } else {
-                tryAccessExternalVolume(vol.path)
+                // Android 11+: volume esterno senza path visibile — chiediamo SAF
+                Toast.makeText(this, "Seleziona la USB nel picker", Toast.LENGTH_LONG).show()
+                pendingSafTargetPath = "USB::${vol.label}"
+                try {
+                    startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                        addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                    }, REQ_SAF)
+                    pendingSafAction = {
+                        Toast.makeText(this, "Permesso USB concesso", Toast.LENGTH_SHORT).show()
+                        updateStorageCards()
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Errore SAF: ${e.message}", Toast.LENGTH_LONG).show()
+                }
             }
         }
 
@@ -894,16 +910,25 @@ class MainActivity : AppCompatActivity() {
                     Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
 
                 val targetPath = pendingSafTargetPath
-                val volumePath = if (targetPath != null) extractVolumePath(targetPath) else null
-
-                if (volumePath != null && volumePath != rootInternal) {
-                    safTreeMap[volumePath] = uri
-                    prefs.edit().putString("saf_tree_$volumePath", uri.toString()).apply()
+                if (targetPath != null && targetPath.startsWith("USB::")) {
+                    // SAF per USB identificata dalla label
+                    val label = targetPath.removePrefix("USB::")
+                    // Salva sotto la label "USB::label" — la useremo come chiave
+                    val key = "USB::$label"
+                    safTreeMap[key] = uri
+                    prefs.edit().putString("saf_tree_$key", uri.toString()).apply()
                     Toast.makeText(this, "Permesso USB concesso", Toast.LENGTH_SHORT).show()
                 } else {
-                    safTreeUri = uri
-                    prefs.edit().putString("saf_tree_uri", uri.toString()).apply()
-                    Toast.makeText(this, "Permesso concesso", Toast.LENGTH_SHORT).show()
+                    val volumePath = if (targetPath != null) extractVolumePath(targetPath) else null
+                    if (volumePath != null && volumePath != rootInternal) {
+                        safTreeMap[volumePath] = uri
+                        prefs.edit().putString("saf_tree_$volumePath", uri.toString()).apply()
+                        Toast.makeText(this, "Permesso USB concesso", Toast.LENGTH_SHORT).show()
+                    } else {
+                        safTreeUri = uri
+                        prefs.edit().putString("saf_tree_uri", uri.toString()).apply()
+                        Toast.makeText(this, "Permesso concesso", Toast.LENGTH_SHORT).show()
+                    }
                 }
 
                 pendingSafAction?.invoke()
@@ -926,6 +951,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun getSafDocumentFile(path: String): DocumentFile? {
+        // Cerca prima per path esatto
         val volumes = listOf(rootInternal) + safTreeMap.keys.toList()
 
         for (volume in volumes.sortedByDescending { it.length }) {
@@ -951,6 +977,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // Fallback: usa il tree principale
         val fallbackTree: Uri = safTreeUri ?: return null
         val rel = path.removePrefix(rootInternal).trimStart('/')
         var doc = DocumentFile.fromTreeUri(this, fallbackTree) ?: return null
