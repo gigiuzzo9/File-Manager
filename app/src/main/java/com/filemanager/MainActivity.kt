@@ -10,7 +10,6 @@ import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
-import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -47,8 +46,6 @@ import com.google.android.material.color.MaterialColors
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.io.InputStream
-import java.io.OutputStream
 import java.nio.file.Files
 import java.util.Collections
 import java.util.concurrent.Executors
@@ -107,6 +104,7 @@ class MainActivity : AppCompatActivity() {
     private var selectionMode: Boolean = false
     private val selectedPaths = mutableSetOf<String>()
 
+    // Mappa path radice volume -> treeUri SAF persistente
     private val safTreeUris = mutableMapOf<String, Uri>()
 
     private var pendingSafPath: String? = null
@@ -155,6 +153,7 @@ class MainActivity : AppCompatActivity() {
         sortBy = prefs.getString("sort_by", "name") ?: "name"
 
         currentPath = rootInternal
+
         loadSafTreeUris()
 
         recycler = findViewById(R.id.recyclerFiles)
@@ -214,12 +213,14 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+
         mainHandler.removeCallbacks(storagePollRunnable)
         mainHandler.post(storagePollRunnable)
 
         if (hasStoragePermission()) {
             loadDirectory(currentPath)
 
+            // SAF automatico sulla memoria interna al primo avvio
             if (!hasSafFor(rootInternal) && !prefs.getBoolean(PREFS_SAF_INTERNAL_REQUESTED, false)) {
                 prefs.edit().putBoolean(PREFS_SAF_INTERNAL_REQUESTED, true).apply()
                 requestSafForPath(rootInternal) {
@@ -245,17 +246,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // HELPER
-    // ============================================================
-
-    private fun isInternalPath(path: String): Boolean {
-        return path == rootInternal || path.startsWith("$rootInternal/")
-    }
-
-    private fun useFileApi(path: String): Boolean = isInternalPath(path)
-
-    // ============================================================
-    // SAF
+    // GESTIONE PERMESSI SAF MULTIPLI
     // ============================================================
 
     private fun loadSafTreeUris() {
@@ -317,7 +308,13 @@ class MainActivity : AppCompatActivity() {
         return best
     }
 
-    private fun hasSafFor(path: String): Boolean = getSafTreeFor(path) != null
+    private fun hasSafFor(path: String): Boolean {
+        return getSafTreeFor(path) != null
+    }
+
+    private fun isInternalPath(path: String): Boolean {
+        return path == rootInternal || path.startsWith("$rootInternal/")
+    }
 
     private fun getVolumeRootFor(path: String): String {
         if (isInternalPath(path)) return rootInternal
@@ -362,6 +359,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildOpenDocumentTreeIntent(volumeRoot: String): Intent {
+        // API 29+: usa StorageVolume.createOpenDocumentTreeIntent() → picker già sulla root
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             try {
                 val sm = getSystemService(STORAGE_SERVICE) as StorageManager
@@ -376,6 +374,7 @@ class MainActivity : AppCompatActivity() {
             } catch (_: Exception) {}
         }
 
+        // Fallback: EXTRA_INITIAL_URI con URI esternalstorage
         val fallback = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
@@ -408,6 +407,7 @@ class MainActivity : AppCompatActivity() {
 
             val volumeRoot = pendingSafPath ?: rootInternal
 
+            // Verifica che l'utente abbia selezionato ESATTAMENTE la root del volume
             val selectedDocId = try {
                 DocumentsContract.getTreeDocumentId(uri)
             } catch (_: Exception) { null }
@@ -421,6 +421,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             if (selectedDocId != null && !selectedDocId.equals(expectedDocId, ignoreCase = true)) {
+                // Sottocartella selezionata: avvisa e fai riprovare
                 AlertDialog.Builder(this)
                     .setTitle("Seleziona la root")
                     .setMessage(
@@ -481,7 +482,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openDirectoryWithSafCheck(path: String) {
-        if (isInternalPath(path) || hasSafFor(path)) {
+        if (hasSafFor(path)) {
             loadDirectory(path)
             return
         }
@@ -492,262 +493,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // DOCUMENTFILE HELPERS
-    // ============================================================
-
-    private fun getSafDocumentFile(path: String): DocumentFile? {
-        val basePath = getSafBaseFor(path) ?: return null
-        val tree = safTreeUris[basePath] ?: return null
-        val rel = path.removePrefix(basePath).trimStart('/')
-        var doc = DocumentFile.fromTreeUri(this, tree) ?: return null
-        if (rel.isEmpty()) return doc
-        for (part in rel.split("/").filter { it.isNotEmpty() }) {
-            doc = doc.findFile(part) ?: return null
-        }
-        return doc
-    }
-
-    private fun readSizeFromUri(uri: Uri): Long {
-        try {
-            contentResolver.query(uri, null, null, null, null)?.use { c ->
-                val idx = c.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
-                if (idx >= 0 && c.moveToFirst() && !c.isNull(idx)) {
-                    val l = c.getLong(idx)
-                    if (l > 0L) return l
-                }
-            }
-        } catch (_: Exception) {}
-        return 0L
-    }
-
-    private fun readLastModifiedFromUri(uri: Uri): Long {
-        try {
-            contentResolver.query(uri, null, null, null, null)?.use { c ->
-                val idx = c.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
-                if (idx >= 0 && c.moveToFirst() && !c.isNull(idx)) {
-                    return c.getLong(idx)
-                }
-            }
-        } catch (_: Exception) {}
-        return 0L
-    }
-
-    // ============================================================
-    // LOAD DIRECTORY
-    // ============================================================
-
-    private fun loadDirectory(path: String, resetCategory: Boolean = false) {
-        currentPath = path
-        txtPath.text = path
-        if (resetCategory) {
-            activeCategory = null
-            searchQuery = ""
-        }
-
-        executor.execute {
-            val result: List<FileItem>? = if (useFileApi(path)) {
-                loadViaFileApi(path)
-            } else {
-                loadViaSaf(path)
-            }
-
-            mainHandler.post {
-                if (result == null) {
-                    Toast.makeText(this, "Cartella non accessibile", Toast.LENGTH_SHORT).show()
-                    return@post
-                }
-                allItems = result
-                applyFilters()
-                updatePasteButton()
-            }
-        }
-    }
-
-    private fun loadViaFileApi(path: String): List<FileItem>? {
-        val dir = File(path)
-        if (!dir.exists() || !dir.isDirectory) return null
-        val files = dir.listFiles() ?: return null
-        val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
-        return filtered.map { f ->
-            val isDir = f.isDirectory
-            FileItem(
-                file = f,
-                name = f.name,
-                path = f.absolutePath,
-                isDirectory = isDir,
-                size = if (isDir) 0L else f.length(),
-                lastModified = f.lastModified(),
-                childrenCount = if (isDir) {
-                    try {
-                        val arr = f.list() ?: emptyArray()
-                        if (showHidden) arr.size else arr.count { !it.startsWith(".") }
-                    } catch (_: Exception) { 0 }
-                } else 0
-            )
-        }
-    }
-
-    private fun loadViaSaf(path: String): List<FileItem>? {
-        val doc = getSafDocumentFile(path) ?: return null
-        if (!doc.isDirectory) return null
-
-        val files = doc.listFiles()
-        val result = mutableListOf<FileItem>()
-
-        for (d in files) {
-            val name = d.name ?: continue
-            if (!showHidden && name.startsWith(".")) continue
-
-            val isDir = d.isDirectory
-            var size = 0L
-            var lastMod = 0L
-
-            if (!isDir) {
-                size = readSizeFromUri(d.uri)
-                if (size <= 0L) {
-                    try { size = d.length() } catch (_: Exception) {}
-                }
-                lastMod = readLastModifiedFromUri(d.uri)
-                if (lastMod <= 0L) {
-                    try { lastMod = d.lastModified() } catch (_: Exception) {}
-                }
-            } else {
-                try { lastMod = d.lastModified() } catch (_: Exception) {}
-            }
-
-            result.add(
-                FileItem(
-                    file = File(path, name),
-                    name = name,
-                    path = "$path/$name",
-                    isDirectory = isDir,
-                    size = size,
-                    lastModified = lastMod,
-                    childrenCount = 0
-                )
-            )
-        }
-        return result
-    }
-
-    private fun applyFilters() {
-        var list = allItems.toList()
-
-        if (searchQuery.isNotEmpty()) {
-            list = list.filter { it.name.lowercase().contains(searchQuery) }
-        }
-
-        if (activeCategory != null) {
-            list = list.filter { item ->
-                !item.isDirectory && categoryFor(item.name) == activeCategory
-            }
-        }
-
-        list = when (sortBy) {
-            "size" -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenByDescending { it.size })
-            "date" -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenByDescending { it.lastModified })
-            else -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenBy { it.name.lowercase() })
-        }
-
-        displayedItems = list
-        renderList()
-    }
-
-    private fun categoryFor(name: String): String {
-        val l = name.lowercase()
-        return when {
-            l.endsWith(".jpg") || l.endsWith(".jpeg") || l.endsWith(".png") ||
-            l.endsWith(".gif") || l.endsWith(".webp") || l.endsWith(".bmp") -> "images"
-            l.endsWith(".mp3") || l.endsWith(".wav") || l.endsWith(".ogg") ||
-            l.endsWith(".flac") || l.endsWith(".m4a") || l.endsWith(".aac") -> "audio"
-            l.endsWith(".mp4") || l.endsWith(".mkv") || l.endsWith(".avi") ||
-            l.endsWith(".mov") || l.endsWith(".webm") || l.endsWith(".3gp") -> "video"
-            else -> "documents"
-        }
-    }
-
-    private fun isDocumentFile(name: String): Boolean {
-        val l = name.lowercase()
-        return listOf(".pdf",".doc",".docx",".txt",".rtf",".odt",".xls",".xlsx",".csv",".ods",".ppt",".pptx",".odp",".zip",".rar",".7z",".tar",".gz").any { l.endsWith(it) }
-    }
-
-    private fun setCategory(cat: String) {
-        if (activeCategory == cat) {
-            activeCategory = null
-            loadDirectory(rootInternal, resetCategory = true)
-            return
-        }
-
-        activeCategory = cat
-        txtPath.text = "Filtro: $cat"
-        Toast.makeText(this, "Ricerca in corso...", Toast.LENGTH_SHORT).show()
-
-        executor.execute {
-            val found = mutableListOf<FileItem>()
-            try { scanRecursiveInternal(File(rootInternal), found, cat, 0) } catch (_: Exception) {}
-            val sorted = when (sortBy) {
-                "size" -> found.sortedByDescending { it.size }
-                "date" -> found.sortedByDescending { it.lastModified }
-                else -> found.sortedBy { it.name.lowercase() }
-            }
-            mainHandler.post { displayedItems = sorted; renderList() }
-        }
-    }
-
-    private fun scanRecursiveInternal(dir: File, out: MutableList<FileItem>, cat: String, depth: Int) {
-        if (depth > 8) return
-        val dirName = dir.name
-        if (dirName == "Android" || dirName == ".trash" || dirName == ".thumbnails") return
-
-        val files = dir.listFiles() ?: return
-        for (f in files) {
-            val name = f.name
-            if (!showHidden && name.startsWith(".")) continue
-            if (f.isDirectory) scanRecursiveInternal(f, out, cat, depth + 1)
-            else {
-                val match = if (cat == "documents") isDocumentFile(name) else categoryFor(name) == cat
-                if (match) {
-                    out.add(FileItem(f, name, f.absolutePath, false, f.length(), f.lastModified(), 0))
-                }
-            }
-        }
-    }
-
-    private fun renderList() {
-        val firstVisible = try {
-            when (val lm = recycler.layoutManager) {
-                is GridLayoutManager -> lm.findFirstVisibleItemPosition()
-                is LinearLayoutManager -> lm.findFirstVisibleItemPosition()
-                else -> 0
-            }
-        } catch (_: Exception) { 0 }
-
-        recycler.layoutManager = if (isGrid) GridLayoutManager(this, 4) else LinearLayoutManager(this)
-
-        recycler.adapter = FileAdapter(
-            items = displayedItems,
-            isGrid = isGrid,
-            selectionMode = selectionMode,
-            selectedPaths = selectedPaths,
-            onClick = { item ->
-                if (selectionMode) toggleSelection(item)
-                else {
-                    if (item.isDirectory) openDirectoryWithSafCheck(item.path)
-                    else openFileWithDefault(item)
-                }
-            },
-            onLongClick = { item ->
-                if (selectionMode) toggleSelection(item) else enterSelectionMode(item)
-            }
-        )
-
-        if (firstVisible > 0 && displayedItems.isNotEmpty()) {
-            recycler.scrollToPosition(firstVisible)
-        }
-    }
-
-    // ============================================================
-    // SELECTION
+    // FINE GESTIONE SAF
     // ============================================================
 
     private fun updateViewToggleIcon() {
@@ -782,7 +528,10 @@ class MainActivity : AppCompatActivity() {
     private fun toggleSelection(item: FileItem) {
         if (selectedPaths.contains(item.path)) {
             selectedPaths.remove(item.path)
-            if (selectedPaths.isEmpty()) { exitSelectionMode(); return }
+            if (selectedPaths.isEmpty()) {
+                exitSelectionMode()
+                return
+            }
         } else {
             selectedPaths.add(item.path)
         }
@@ -797,8 +546,10 @@ class MainActivity : AppCompatActivity() {
             categoriesRow.visibility = View.GONE
             storageRow.visibility = View.GONE
             actionsRow.visibility = View.GONE
+
             val count = selectedPaths.size
             txtSelectionCount.text = if (count == 1) "1 selezionato" else "$count selezionati"
+
             btnSelPaste.visibility = if (clipboardPaths.isNotEmpty()) View.VISIBLE else View.GONE
         } else {
             searchBar.visibility = View.VISIBLE
@@ -806,16 +557,14 @@ class MainActivity : AppCompatActivity() {
             categoriesRow.visibility = View.VISIBLE
             storageRow.visibility = View.VISIBLE
             actionsRow.visibility = View.VISIBLE
+
             updatePasteButton()
         }
     }
 
-    // ============================================================
-    // DELETE
-    // ============================================================
-
     private fun deleteSelectedFiles() {
         if (selectedPaths.isEmpty()) return
+
         val count = selectedPaths.size
         val pathsToDelete = selectedPaths.toList()
 
@@ -823,7 +572,8 @@ class MainActivity : AppCompatActivity() {
             .setTitle("Elimina")
             .setMessage("Eliminare $count file?")
             .setPositiveButton("Elimina") { _, _ ->
-                allItems = allItems.filter { !selectedPaths.contains(it.path) }
+                val remaining = allItems.filter { !selectedPaths.contains(it.path) }
+                allItems = remaining
                 displayedItems = displayedItems.filter { !selectedPaths.contains(it.path) }
                 exitSelectionMode()
                 renderList()
@@ -831,14 +581,18 @@ class MainActivity : AppCompatActivity() {
                 executor.execute {
                     for (path in pathsToDelete) {
                         try {
-                            if (useFileApi(path)) {
-                                val f = File(path)
-                                if (f.exists()) {
-                                    val ok = if (f.isDirectory) deleteRecursivelyFast(f) else f.delete()
-                                    if (!ok) deleteViaSaf(path)
-                                }
-                            } else {
-                                deleteViaSaf(path)
+                            val f = File(path)
+                            if (!f.exists()) {
+                                deleteViaSafTree(path)
+                                continue
+                            }
+
+                            var ok = try {
+                                if (f.isDirectory) deleteRecursivelyFast(f) else f.delete()
+                            } catch (_: Exception) { false }
+
+                            if (!ok) {
+                                ok = deleteViaSafTree(path)
                             }
                         } catch (_: Exception) {}
                     }
@@ -854,36 +608,58 @@ class MainActivity : AppCompatActivity() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 Files.walk(file.toPath())
                     .sorted(Comparator.reverseOrder())
-                    .forEach { p -> try { Files.deleteIfExists(p) } catch (_: Exception) {} }
+                    .forEach { p ->
+                        try { Files.deleteIfExists(p) } catch (_: Exception) {}
+                    }
                 !file.exists()
-            } else deleteRecursivelyLegacy(file)
-        } catch (_: Exception) { deleteRecursivelyLegacy(file) }
+            } else {
+                deleteRecursivelyLegacy(file)
+            }
+        } catch (_: Exception) {
+            deleteRecursivelyLegacy(file)
+        }
     }
 
     private fun deleteRecursivelyLegacy(file: File): Boolean {
         if (file.isDirectory) {
-            file.listFiles()?.forEach { deleteRecursivelyLegacy(it) }
+            val children = file.listFiles()
+            if (children != null) {
+                for (child in children) {
+                    deleteRecursivelyLegacy(child)
+                }
+            }
         }
-        return try { file.delete() } catch (_: Exception) { false }
+        return try {
+            file.delete()
+        } catch (_: Exception) {
+            false
+        }
     }
 
-    private fun deleteViaSaf(path: String): Boolean {
-        val doc = getSafDocumentFile(path) ?: return false
+    private fun deleteViaSafTree(path: String): Boolean {
+        val basePath = getSafBaseFor(path) ?: return false
+        val tree = safTreeUris[basePath] ?: return false
         return try {
-            if (doc.isDirectory) deleteDocumentRecursive(doc) else doc.delete()
-        } catch (_: Exception) { false }
+            val rel = path.removePrefix(basePath).trimStart('/')
+            if (rel.isEmpty()) return false
+
+            val treeDocId = DocumentsContract.getTreeDocumentId(tree)
+            val docId = "$treeDocId/$rel"
+            val docUri = DocumentsContract.buildDocumentUriUsingTree(tree, docId)
+            DocumentsContract.deleteDocument(contentResolver, docUri)
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun deleteDocumentRecursive(doc: DocumentFile): Boolean {
         if (doc.isDirectory) {
-            for (child in doc.listFiles()) deleteDocumentRecursive(child)
+            for (child in doc.listFiles()) {
+                deleteDocumentRecursive(child)
+            }
         }
         return doc.delete()
     }
-
-    // ============================================================
-    // COPY / PASTE
-    // ============================================================
 
     private fun copySelectedFiles(action: String) {
         if (selectedPaths.isEmpty()) return
@@ -898,412 +674,146 @@ class MainActivity : AppCompatActivity() {
         updateSelectionUI()
     }
 
-    private fun pasteFromClipboard() {
-        if (clipboardPaths.isEmpty()) {
-            Toast.makeText(this, "Niente negli appunti", Toast.LENGTH_SHORT).show()
-            return
-        }
+    private fun showSelectionMoreMenu() {
+        if (selectedPaths.isEmpty()) return
 
-        val srcPaths = clipboardPaths.toList()
-        val action = clipboardAction
-        val dstDir = File(currentPath)
-        val dstPath = dstDir.absolutePath
+        val popup = PopupMenu(this, btnSelMore)
+        val count = selectedPaths.size
 
-        if (useFileApi(dstPath)) {
-            pasteInternal(srcPaths, action, dstDir, dstPath)
+        val allVisibleSelected = displayedItems.isNotEmpty() &&
+                displayedItems.all { selectedPaths.contains(it.path) }
+
+        if (allVisibleSelected) {
+            popup.menu.add(0, 20, 0, "Deseleziona tutto")
         } else {
-            pasteToSaf(srcPaths, action, dstPath)
-        }
-    }
-
-    private fun pasteInternal(srcPaths: List<String>, action: String?, dstDir: File, dstPath: String) {
-        val existing = srcPaths.filter { File(it).exists() }
-        if (existing.isEmpty()) {
-            Toast.makeText(this, "Nessun file originale trovato", Toast.LENGTH_SHORT).show()
-            clearClipboard()
-            return
+            popup.menu.add(0, 20, 0, "Seleziona tutto")
         }
 
-        val placeholders = mutableListOf<FileItem>()
-        val pending = mutableListOf<Pair<String, File>>()
-
-        for (srcPath in existing) {
-            val src = File(srcPath)
-            var dstName = src.name
-            var dst = File(dstDir, dstName)
-            if (dst.absolutePath == src.absolutePath || dst.exists()) {
-                dstName = generateUniqueName(dstDir, src.name)
-                dst = File(dstDir, dstName)
+        if (count == 1) {
+            val item = getSingleSelectedItem()
+            if (item != null && !item.isDirectory) {
+                popup.menu.add(0, 10, 1, "Apri")
+                popup.menu.add(0, 11, 2, "Apri con...")
             }
-            placeholders.add(
-                FileItem(
-                    file = dst, name = dstName, path = dst.absolutePath,
-                    isDirectory = src.isDirectory,
-                    size = if (src.isFile) src.length() else 0L,
-                    lastModified = System.currentTimeMillis(), childrenCount = 0
-                )
-            )
-            pending.add(srcPath to dst)
         }
 
-        allItems = allItems + placeholders
-        applyFilters()
-        Toast.makeText(this,
-            if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
-            Toast.LENGTH_SHORT).show()
+        popup.menu.add(0, 1, 3, "Taglia")
+        popup.menu.add(0, 2, 4, "Condividi")
+        popup.menu.add(0, 3, 5, "Comprimi in ZIP")
 
-        val finalAction = action ?: "copy"
-        clearClipboard()
-        exitSelectionMode()
-        updatePasteButton()
-
-        heavyExecutor.execute {
-            var copied = 0
-            var errorMsg = ""
-            val pool = Executors.newFixedThreadPool(COPY_THREADS)
-
-            try {
-                for ((index, pair) in pending.withIndex()) {
-                    val srcPath = pair.first
-                    val src = File(srcPath)
-                    val dst = placeholders[index].file
-                    var ok = false
-                    var renamed = false
-
-                    if (finalAction == "cut") {
-                        try { renamed = src.renameTo(dst); ok = renamed } catch (_: Exception) {}
-                    }
-
-                    if (!ok) {
-                        try {
-                            if (src.isDirectory) { copyDirectoryRecursiveParallel(src, dst, pool); ok = true }
-                            else { copyFile(src, dst); ok = true }
-                        } catch (e: Exception) { errorMsg += "\n${src.name}: ${e.message}" }
-                    }
-
-                    if (!ok && !useFileApi(srcPath)) {
-                        try {
-                            ok = if (src.isDirectory) copyDirectoryViaSaf(src, dst) else copyFileViaSaf(src, dst)
-                        } catch (_: Exception) {}
-                    }
-
-                    if (ok) {
-                        copied++
-                        if (finalAction == "cut" && !renamed && dst.absolutePath != src.absolutePath && src.exists()) {
-                            try {
-                                if (useFileApi(src.absolutePath)) {
-                                    if (src.isDirectory) deleteRecursivelyFast(src) else src.delete()
-                                } else deleteViaSaf(src.absolutePath)
-                            } catch (_: Exception) {}
-                        }
-                    }
+        if (count == 1) {
+            val path = selectedPaths.first()
+            val item = allItems.find { it.path == path }
+            if (item != null) {
+                popup.menu.add(0, 4, 6, "Rinomina")
+                if (!item.isDirectory && item.name.lowercase().endsWith(".zip")) {
+                    popup.menu.add(0, 5, 7, "Decomprimi")
                 }
-            } finally { pool.shutdown() }
-
-            if (copied > 0) scanPath(dstPath)
-
-            val fCopied = copied
-            val fErr = errorMsg
-            mainHandler.post {
-                if (fCopied > 0) {
-                    Toast.makeText(this,
-                        if (finalAction == "cut") "Spostati $fCopied file" else "Copiati $fCopied file",
-                        Toast.LENGTH_SHORT).show()
-                } else if (fErr.isNotEmpty()) {
-                    AlertDialog.Builder(this)
-                        .setTitle("Errore Incolla")
-                        .setMessage("Nessun file copiato.\n$fErr")
-                        .setPositiveButton("OK", null).show()
-                }
-                if (currentPath == dstPath) loadDirectory(currentPath)
+                popup.menu.add(0, 6, 8, "Proprietà")
             }
         }
-    }
 
-    private fun pasteToSaf(srcPaths: List<String>, action: String?, dstPath: String) {
-        Toast.makeText(this,
-            if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
-            Toast.LENGTH_SHORT).show()
-
-        val finalAction = action ?: "copy"
-        clearClipboard()
-        exitSelectionMode()
-        updatePasteButton()
-
-        heavyExecutor.execute {
-            var copied = 0
-            var errorMsg = ""
-
-            val dstParentDoc = getSafDocumentFile(dstPath)
-            if (dstParentDoc == null) {
-                mainHandler.post {
-                    AlertDialog.Builder(this)
-                        .setTitle("Errore")
-                        .setMessage("Impossibile accedere alla destinazione (SAF)")
-                        .setPositiveButton("OK", null).show()
-                }
-                return@execute
-            }
-
-            for (srcPath in srcPaths) {
-                try {
-                    val srcDoc = getSafDocumentFile(srcPath)
-                    val srcFile = File(srcPath)
-
-                    val displayName = srcDoc?.name ?: srcFile.name
-
-                    var targetName = displayName
-                    if (dstParentDoc.findFile(targetName) != null) {
-                        targetName = generateUniqueNameSaf(dstParentDoc, displayName)
+        popup.setOnMenuItemClickListener { menuItem ->
+            when (menuItem.itemId) {
+                20 -> {
+                    if (allVisibleSelected) selectedPaths.clear()
+                    else {
+                        selectedPaths.clear()
+                        for (item in displayedItems) selectedPaths.add(item.path)
                     }
-
-                    val isDir = srcDoc?.isDirectory ?: srcFile.isDirectory
-
-                    if (isDir) {
-                        val newDir = dstParentDoc.createDirectory(targetName)
-                        if (newDir != null) {
-                            copySafDirRecursive(srcDoc, srcFile, newDir)
-                            copied++
-                        }
-                    } else {
-                        val ok = copySafFileTo(srcDoc, srcFile, dstParentDoc, targetName)
-                        if (ok) copied++
-                    }
-
-                    if (copied > 0 && finalAction == "cut") {
-                        try {
-                            if (srcDoc != null) deleteDocumentRecursive(srcDoc)
-                            else if (srcFile.exists() && useFileApi(srcPath)) {
-                                if (srcFile.isDirectory) deleteRecursivelyFast(srcFile) else srcFile.delete()
-                            }
-                        } catch (_: Exception) {}
-                    }
-                } catch (e: Exception) {
-                    errorMsg += "\n${File(srcPath).name}: ${e.message}"
+                    updateSelectionUI()
+                    renderList()
                 }
-            }
-
-            val fCopied = copied
-            val fErr = errorMsg
-            mainHandler.post {
-                if (fCopied > 0) {
-                    Toast.makeText(this,
-                        if (finalAction == "cut") "Spostati $fCopied file" else "Copiati $fCopied file",
-                        Toast.LENGTH_SHORT).show()
-                    if (currentPath == dstPath) loadDirectory(currentPath)
-                } else if (fErr.isNotEmpty()) {
-                    AlertDialog.Builder(this)
-                        .setTitle("Errore Incolla")
-                        .setMessage("Nessun file copiato.\n$fErr")
-                        .setPositiveButton("OK", null).show()
+                10 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) { exitSelectionMode(); openFileWithDefault(item) }
                 }
-            }
-        }
-    }
-
-    private fun generateUniqueNameSaf(parent: DocumentFile, name: String): String {
-        val dot = name.lastIndexOf('.')
-        val base = if (dot > 0) name.substring(0, dot) else name
-        val ext = if (dot > 0) name.substring(dot) else ""
-        var i = 1
-        var candidate = "${base}_$i$ext"
-        while (parent.findFile(candidate) != null) {
-            i++
-            candidate = "${base}_$i$ext"
-        }
-        return candidate
-    }
-
-    private fun copySafFileTo(
-        srcDoc: DocumentFile?,
-        srcFile: File,
-        dstParent: DocumentFile,
-        targetName: String
-    ): Boolean {
-        return try {
-            val newDoc = dstParent.createFile(getMimeType(targetName), targetName) ?: return false
-            val out = contentResolver.openOutputStream(newDoc.uri) ?: return false
-            val input: InputStream = if (srcDoc != null) {
-                contentResolver.openInputStream(srcDoc.uri) ?: return false
-            } else {
-                FileInputStream(srcFile)
-            }
-            input.use { ins ->
-                out.use { outs ->
-                    val buf = ByteArray(BUFFER_SIZE)
-                    var len: Int
-                    while (ins.read(buf).also { len = it } > 0) outs.write(buf, 0, len)
-                    outs.flush()
+                11 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) { exitSelectionMode(); openFileWithPicker(item) }
+                }
+                1 -> copySelectedFiles("cut")
+                2 -> shareSelectedFiles()
+                3 -> comprimiZipSelezioneMultipla()
+                4 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) { exitSelectionMode(); renameItem(item) }
+                }
+                5 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) { exitSelectionMode(); decomprimiZip(item) }
+                }
+                6 -> {
+                    val item = getSingleSelectedItem()
+                    if (item != null) { exitSelectionMode(); showItemInfo(item) }
                 }
             }
             true
-        } catch (_: Exception) { false }
+        }
+        popup.show()
     }
 
-    private fun copySafDirRecursive(srcDoc: DocumentFile?, srcFile: File, dstDoc: DocumentFile) {
-        // 1) Sorgente via SAF
-        if (srcDoc != null) {
-            val doc = srcDoc
-            val children = doc.listFiles()
-            for (child in children) {
-                val name = child.name ?: continue
-                if (child.isDirectory) {
-                    val sub = dstDoc.createDirectory(name)
-                    if (sub != null) {
-                        copySafDirRecursive(child, File(srcFile, name), sub)
-                    }
-                } else {
-                    val out = dstDoc.createFile(getMimeType(name), name)
-                    if (out != null) {
-                        try {
-                            val ins = contentResolver.openInputStream(child.uri)
-                            if (ins != null) {
-                                ins.use { input ->
-                                    val outs = contentResolver.openOutputStream(out.uri)
-                                    if (outs != null) {
-                                        outs.use { output ->
-                                            val buf = ByteArray(BUFFER_SIZE)
-                                            var len: Int
-                                            while (input.read(buf).also { len = it } > 0) {
-                                                output.write(buf, 0, len)
-                                            }
-                                            output.flush()
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (_: Exception) {}
-                    }
-                }
+    private fun getSingleSelectedItem(): FileItem? {
+        if (selectedPaths.size != 1) return null
+        val path = selectedPaths.first()
+        return allItems.find { it.path == path }
+    }
+
+    private fun shareSelectedFiles() {
+        if (selectedPaths.isEmpty()) return
+        if (selectedPaths.size == 1) {
+            val path = selectedPaths.first()
+            val item = allItems.find { it.path == path }
+            if (item != null && !item.isDirectory) {
+                shareFile(item)
+                exitSelectionMode()
+            } else if (item != null && item.isDirectory) {
+                Toast.makeText(this, "Impossibile condividere una cartella", Toast.LENGTH_SHORT).show()
             }
             return
         }
-
-        // 2) Sorgente via File
-        val files = srcFile.listFiles() ?: return
-        for (f in files) {
-            if (f.isDirectory) {
-                val sub = dstDoc.createDirectory(f.name)
-                if (sub != null) {
-                    copySafDirRecursive(null, f, sub)
-                }
-            } else {
-                copySafFileTo(null, f, dstDoc, f.name)
-            }
-        }
-    }
-
-    private fun generateUniqueName(dir: File, originalName: String): String {
-        val dot = originalName.lastIndexOf('.')
-        val base = if (dot > 0) originalName.substring(0, dot) else originalName
-        val ext = if (dot > 0) originalName.substring(dot) else ""
-        var c = 1
-        var cand = "${base}_$c$ext"
-        while (File(dir, cand).exists()) { c++; cand = "${base}_$c$ext" }
-        return cand
-    }
-
-    private fun clearClipboard() {
-        clipboardPaths.clear()
-        clipboardAction = null
-    }
-
-    private fun copyFileViaSaf(src: File, dst: File): Boolean {
-        return try {
-            val parentDoc = getSafDocumentFile(dst.parentFile?.absolutePath ?: "") ?: return false
-            val newFile = parentDoc.createFile(getMimeType(src.name), src.name) ?: return false
-            contentResolver.openOutputStream(newFile.uri)?.use { out ->
-                FileInputStream(src).use { ins ->
-                    val buf = ByteArray(BUFFER_SIZE)
-                    var len: Int
-                    while (ins.read(buf).also { len = it } > 0) out.write(buf, 0, len)
-                    out.flush()
-                }
-            } ?: return false
-            true
-        } catch (_: Exception) { false }
-    }
-
-    private fun copyDirectoryViaSaf(src: File, dst: File): Boolean {
-        return try {
-            val parentDir = dst.parentFile ?: return false
-            val parentDoc = getSafDocumentFile(parentDir.absolutePath) ?: return false
-            val newDir = parentDoc.findFile(dst.name) ?: parentDoc.createDirectory(dst.name) ?: return false
-            copySafDirRecursive(null, src, newDir)
-            true
-        } catch (_: Exception) { false }
-    }
-
-    private fun copyFile(src: File, dst: File) {
-        dst.parentFile?.mkdirs()
-        try {
-            FileInputStream(src).use { ins ->
-                FileOutputStream(dst).use { outs ->
-                    val inCh = ins.channel; val outCh = outs.channel
-                    var pos = 0L; val size = inCh.size()
-                    while (pos < size) pos += inCh.transferTo(pos, size - pos, outCh)
-                }
-            }
-            try { dst.setLastModified(src.lastModified()) } catch (_: Exception) {}
-            return
-        } catch (_: Exception) {}
 
         try {
-            FileInputStream(src).use { ins ->
-                FileOutputStream(dst).use { outs ->
-                    val buf = ByteArray(BUFFER_SIZE)
-                    var len: Int
-                    while (ins.read(buf).also { len = it } > 0) outs.write(buf, 0, len)
-                    outs.flush()
+            val uris = ArrayList<Uri>()
+            for (path in selectedPaths) {
+                val f = File(path)
+                if (f.exists() && f.isFile) {
+                    val uri = FileProvider.getUriForFile(this, "$packageName.provider", f)
+                    uris.add(uri)
                 }
             }
-            try { dst.setLastModified(src.lastModified()) } catch (_: Exception) {}
-            return
-        } catch (_: Exception) {}
 
-        throw java.io.IOException("Impossibile copiare: ${src.absolutePath} -> ${dst.absolutePath}")
-    }
-
-    private fun copyDirectoryRecursiveParallel(src: File, dst: File, pool: java.util.concurrent.ExecutorService) {
-        if (!dst.exists()) {
-            if (!dst.mkdirs() && !dst.exists()) throw java.io.IOException("Impossibile creare: ${dst.absolutePath}")
-        }
-        val files = src.listFiles() ?: throw java.io.IOException("Impossibile leggere: ${src.absolutePath}")
-        val errors = Collections.synchronizedList(mutableListOf<String>())
-        val futures = mutableListOf<Future<*>>()
-
-        for (f in files) {
-            val newFile = File(dst, f.name)
-            if (f.isDirectory) {
-                futures.add(pool.submit {
-                    try { copyDirectoryRecursiveParallel(f, newFile, pool) }
-                    catch (e: Exception) { errors.add("${f.name}: ${e.message}") }
-                })
-            } else {
-                futures.add(pool.submit {
-                    try { copyFile(f, newFile) }
-                    catch (e: Exception) { errors.add("${f.name}: ${e.message}") }
-                })
+            if (uris.isEmpty()) {
+                Toast.makeText(this, "Nessun file da condividere", Toast.LENGTH_SHORT).show()
+                return
             }
+
+            val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                type = "*/*"
+                putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(intent, "Condividi con..."))
+            exitSelectionMode()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
         }
-
-        for (future in futures) { try { future.get() } catch (_: Exception) {} }
-        if (errors.isNotEmpty()) throw java.io.IOException("Errori:\n${errors.joinToString("\n")}")
     }
-
-    // ============================================================
-    // ZIP
-    // ============================================================
 
     private fun comprimiZipSelezioneMultipla() {
         if (selectedPaths.isEmpty()) return
+
         val pathsToZip = selectedPaths.toList()
-        val firstName = File(pathsToZip.first()).name
+        val firstPath = pathsToZip.first()
+        val firstName = File(firstPath).name
         val baseName = if (firstName.contains(".")) firstName.substringBeforeLast(".") else firstName
 
         var zipName = "$baseName.zip"
         var counter = 1
-        while (fileExistsIn(currentPath, zipName)) { zipName = "${baseName}_$counter.zip"; counter++ }
+        while (File(currentPath, zipName).exists()) {
+            zipName = "${baseName}_$counter.zip"
+            counter++
+        }
 
         val finalZipName = zipName
         Toast.makeText(this, "Compressione in corso...", Toast.LENGTH_SHORT).show()
@@ -1313,377 +823,490 @@ class MainActivity : AppCompatActivity() {
             var errorMsg = ""
 
             try {
-                if (useFileApi(currentPath)) {
-                    val zipFile = File(currentPath, finalZipName)
+                ok = comprimiZipMultiViaSaf(pathsToZip, finalZipName)
+                if (!ok) errorMsg = "SAF: compressione fallita"
+            } catch (e: Exception) {
+                ok = false
+                errorMsg = "SAF: ${e.message}"
+            }
+
+            if (!ok) {
+                val zipFile = File(currentPath, finalZipName)
+                var addedCount = 0
+                try {
                     ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
                         for (path in pathsToZip) {
                             val f = File(path)
                             if (!f.exists()) continue
-                            if (f.isDirectory) addDirectoryToZip(f, f.name, zos)
-                            else addFileToZip(f, f.name, zos)
+                            if (f.isDirectory) {
+                                addDirectoryToZip(f, f.name, zos)
+                            } else {
+                                addFileToZip(f, f.name, zos)
+                            }
+                            addedCount++
                         }
                     }
-                    ok = true
-                } else {
-                    ok = comprimiZipMultiViaSaf(pathsToZip, finalZipName)
+                    ok = addedCount > 0
+                    if (!ok) errorMsg += " | File: nessun file aggiunto"
+                } catch (e: Exception) {
+                    ok = false
+                    errorMsg += " | File: ${e.message}"
+                    try { zipFile.delete() } catch (_: Exception) {}
                 }
-            } catch (e: Exception) {
-                ok = false
-                errorMsg = e.message ?: ""
             }
 
-            if (ok) scanPath(File(currentPath, finalZipName).absolutePath)
+            if (ok) {
+                scanPath(File(currentPath, finalZipName).absolutePath)
+            }
 
-            val fOk = ok; val fErr = errorMsg
             mainHandler.post {
-                if (fOk) {
+                if (ok) {
                     Toast.makeText(this, "Creato: $finalZipName", Toast.LENGTH_SHORT).show()
                     exitSelectionMode()
                     loadDirectory(currentPath)
                 } else {
                     AlertDialog.Builder(this)
                         .setTitle("Errore Compressione")
-                        .setMessage("Errore:\n$fErr")
-                        .setPositiveButton("OK", null).show()
+                        .setMessage("Errore:\n$errorMsg")
+                        .setPositiveButton("OK", null)
+                        .show()
                 }
             }
         }
-    }
-
-    private fun fileExistsIn(dirPath: String, name: String): Boolean {
-        return if (useFileApi(dirPath)) File(dirPath, name).exists()
-        else getSafDocumentFile(dirPath)?.findFile(name) != null
     }
 
     private fun comprimiZipMultiViaSaf(pathsToZip: List<String>, zipName: String): Boolean {
         return try {
-            val parentDoc = getSafDocumentFile(currentPath) ?: return false
+            val parentDir = File(currentPath)
+            val parentDoc = getSafDocumentFile(parentDir.absolutePath) ?: return false
+
             val newZipDoc = parentDoc.createFile("application/zip", zipName) ?: return false
             val outputStream = contentResolver.openOutputStream(newZipDoc.uri) ?: return false
+
             ZipOutputStream(outputStream).use { zos ->
                 for (path in pathsToZip) {
-                    val srcDoc = getSafDocumentFile(path)
-                    val srcFile = File(path)
-                    if (srcDoc != null) {
-                        if (srcDoc.isDirectory) addSafDirToZip(srcDoc, srcDoc.name ?: "dir", zos)
-                        else addSafFileToZip(srcDoc, srcDoc.name ?: "file", zos)
-                    } else if (srcFile.exists()) {
-                        if (srcFile.isDirectory) addDirectoryToZip(srcFile, srcFile.name, zos)
-                        else addFileToZip(srcFile, srcFile.name, zos)
+                    val f = File(path)
+                    if (!f.exists()) continue
+                    if (f.isDirectory) {
+                        addDirectoryToZip(f, f.name, zos)
+                    } else {
+                        addFileToZip(f, f.name, zos)
                     }
                 }
             }
             true
-        } catch (_: Exception) { false }
-    }
-
-    private fun addSafDirToZip(dir: DocumentFile, basePath: String, zos: ZipOutputStream) {
-        for (child in dir.listFiles()) {
-            val name = child.name ?: continue
-            val entry = "$basePath/$name"
-            if (child.isDirectory) addSafDirToZip(child, entry, zos)
-            else addSafFileToZip(child, entry, zos)
+        } catch (e: Exception) {
+            false
         }
     }
 
-    private fun addSafFileToZip(doc: DocumentFile, entryName: String, zos: ZipOutputStream) {
+    private fun updateStorageCards() {
+        storageRow.removeAllViews()
+
+        val volumes = mutableListOf<StorageVolumeInfo>()
+
         try {
-            contentResolver.openInputStream(doc.uri)?.use { ins ->
-                zos.putNextEntry(ZipEntry(entryName))
-                val buf = ByteArray(ZIP_BUFFER_SIZE)
-                var len: Int
-                while (ins.read(buf).also { len = it } > 0) zos.write(buf, 0, len)
-                zos.closeEntry()
-            }
-        } catch (_: Exception) {}
-    }
-
-    private fun addDirectoryToZip(dir: File, basePath: String, zos: ZipOutputStream) {
-        val files = dir.listFiles() ?: return
-        for (f in files) {
-            val entry = "$basePath/${f.name}"
-            if (f.isDirectory) addDirectoryToZip(f, entry, zos) else addFileToZip(f, entry, zos)
+            val stat = StatFs(Environment.getExternalStorageDirectory().path)
+            val totalBytes = stat.blockCountLong * stat.blockSizeLong
+            val freeBytes = stat.availableBlocksLong * stat.blockSizeLong
+            val usedBytes = totalBytes - freeBytes
+            volumes.add(StorageVolumeInfo("Memoria interna", rootInternal, usedBytes, totalBytes))
+        } catch (e: Exception) {
+            volumes.add(StorageVolumeInfo("Memoria interna", rootInternal, 0L, 0L))
         }
-    }
 
-    private fun addFileToZip(file: File, entryName: String, zos: ZipOutputStream) {
-        FileInputStream(file).use { fis ->
-            zos.putNextEntry(ZipEntry(entryName))
-            val buf = ByteArray(ZIP_BUFFER_SIZE)
-            var len: Int
-            while (fis.read(buf).also { len = it } > 0) zos.write(buf, 0, len)
-            zos.closeEntry()
-        }
-    }
-
-    private fun decomprimiZip(item: FileItem) {
-        if (!item.name.lowercase().endsWith(".zip")) {
-            Toast.makeText(this, "Non è un file ZIP", Toast.LENGTH_SHORT).show(); return
-        }
-        val baseName = item.name.substringBeforeLast(".")
-        Toast.makeText(this, "Decompressione in corso...", Toast.LENGTH_SHORT).show()
-
-        heavyExecutor.execute {
-            var filesExtracted = 0
-            var errorMsg = ""
-
-            try {
-                val srcDoc = if (useFileApi(item.path)) null else getSafDocumentFile(item.path)
-                val zipInput: InputStream = if (srcDoc != null) {
-                    contentResolver.openInputStream(srcDoc.uri) ?: throw Exception("Impossibile aprire ZIP")
-                } else {
-                    FileInputStream(item.file)
-                }
-
-                ZipInputStream(zipInput).use { zis ->
-                    var entry: ZipEntry? = zis.nextEntry
-                    while (entry != null) {
-                        val entryName = entry.name
-                        if (useFileApi(currentPath)) {
-                            val extractDir = File(currentPath, baseName)
-                            if (!extractDir.exists()) extractDir.mkdirs()
-                            val outFile = File(extractDir, entryName)
-                            if (outFile.canonicalPath.startsWith(extractDir.canonicalPath)) {
-                                if (entry.isDirectory) outFile.mkdirs()
-                                else {
-                                    outFile.parentFile?.mkdirs()
-                                    try {
-                                        FileOutputStream(outFile).use { fos ->
-                                            val buf = ByteArray(ZIP_BUFFER_SIZE)
-                                            var len: Int
-                                            while (zis.read(buf).also { len = it } > 0) fos.write(buf, 0, len)
-                                            fos.flush()
-                                        }
-                                        filesExtracted++
-                                    } catch (_: Exception) {}
-                                }
-                            }
+        try {
+            val storageManager = getSystemService(STORAGE_SERVICE) as StorageManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                for (vol in storageManager.storageVolumes) {
+                    if (vol.isPrimary) continue
+                    if (vol.isRemovable) {
+                        val path = getVolumePath(vol)
+                        if (path != null && File(path).exists()) {
+                            try {
+                                val stat = StatFs(path)
+                                val totalBytes = stat.blockCountLong * stat.blockSizeLong
+                                val freeBytes = stat.availableBlocksLong * stat.blockSizeLong
+                                val usedBytes = totalBytes - freeBytes
+                                val label = vol.getDescription(this) ?: "Storage esterno"
+                                volumes.add(StorageVolumeInfo(label, path, usedBytes, totalBytes))
+                            } catch (_: Exception) {}
                         } else {
-                            val parentDoc = getSafDocumentFile(currentPath)
-                            if (parentDoc != null) {
-                                val ok = writeEntryToSaf(parentDoc, baseName, entryName, entry.isDirectory, zis)
-                                if (ok) filesExtracted++
-                            }
+                            try {
+                                val label = vol.getDescription(this) ?: "Storage esterno"
+                                if (vol.state == Environment.MEDIA_MOUNTED) {
+                                    volumes.add(StorageVolumeInfo(label, "", 0L, 0L))
+                                }
+                            } catch (_: Exception) {}
                         }
-                        zis.closeEntry()
-                        entry = zis.nextEntry
                     }
                 }
-            } catch (e: Exception) { errorMsg = e.message ?: "" }
-
-            val fEx = filesExtracted; val fErr = errorMsg
-            mainHandler.post {
-                if (fEx > 0) {
-                    Toast.makeText(this, "Estratti $fEx file in: $baseName/", Toast.LENGTH_SHORT).show()
-                    loadDirectory(currentPath)
-                } else {
-                    AlertDialog.Builder(this)
-                        .setTitle("Errore Decompressione")
-                        .setMessage("Nessun file estratto.\n$fErr")
-                        .setPositiveButton("OK", null).show()
-                }
             }
-        }
-    }
-
-    private fun writeEntryToSaf(
-    parentDoc: DocumentFile,
-    baseName: String,
-    entryName: String,
-    isDirectory: Boolean,
-    zis: ZipInputStream
-): Boolean {
-    return try {
-        var base = parentDoc.findFile(baseName)
-        if (base == null) {
-            base = parentDoc.createDirectory(baseName)
-        }
-        if (base == null) return false
-        val safeBase: DocumentFile = base
-
-        val parts = entryName.split("/").filter { it.isNotEmpty() }
-        if (parts.isEmpty()) return false
-        val fileName = parts.last()
-        val folders = parts.dropLast(1)
-
-        var cur: DocumentFile = safeBase
-        for (folder in folders) {
-            var next = cur.findFile(folder)
-            if (next == null) {
-                next = cur.createDirectory(folder)
-            }
-            if (next == null) return false
-            val safeNext: DocumentFile = next
-            cur = safeNext
-        }
-
-        if (isDirectory) {
-            cur.createDirectory(fileName)
-            return true
-        }
-
-        val newFile = cur.createFile(getMimeType(fileName), fileName)
-        if (newFile == null) return false
-        val safeFile: DocumentFile = newFile
-
-        val out = contentResolver.openOutputStream(safeFile.uri) ?: return false
-        out.use { os ->
-            val buf = ByteArray(ZIP_BUFFER_SIZE)
-            var len: Int
-            while (zis.read(buf).also { len = it } > 0) os.write(buf, 0, len)
-            os.flush()
-        }
-        true
-    } catch (_: Exception) { false }
-}
-
-    // ============================================================
-    // RENAME
-    // ============================================================
-
-    private fun renameItem(item: FileItem) {
-        val input = EditText(this)
-        input.setText(item.name)
-        AlertDialog.Builder(this)
-            .setTitle("Rinomina")
-            .setView(input)
-            .setPositiveButton("OK") { _, _ ->
-                val newName = input.text.toString().trim()
-                if (newName.isEmpty() || newName == item.name) return@setPositiveButton
-
-                if (useFileApi(item.path)) {
-                    try {
-                        val newFile = File(item.file.parentFile, newName)
-                        if (item.file.renameTo(newFile)) {
-                            updateInMediaStore(item.path, newFile.absolutePath)
-                            scanPath(newFile.absolutePath)
-                            Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
-                            loadDirectory(currentPath); return@setPositiveButton
-                        }
-                    } catch (_: Exception) {}
-                }
-
-                val doc = getSafDocumentFile(item.path)
-                if (doc != null && doc.renameTo(newName)) {
-                    Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
-                    loadDirectory(currentPath)
-                } else {
-                    Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
-                }
-            }
-            .setNegativeButton("Annulla", null).show()
-    }
-
-    private fun updateInMediaStore(oldPath: String, newPath: String) {
-        try {
-            if (File(newPath).isDirectory) return
-            val values = ContentValues().apply {
-                put(MediaStore.MediaColumns.DATA, newPath)
-                put(MediaStore.MediaColumns.DISPLAY_NAME, File(newPath).name)
-            }
-            contentResolver.update(getMediaStoreUri(oldPath), values,
-                "${MediaStore.MediaColumns.DATA} = ?", arrayOf(oldPath))
         } catch (_: Exception) {}
-    }
 
-    private fun getMediaStoreUri(path: String): Uri {
-        val l = path.lowercase()
-        return when {
-            l.endsWith(".jpg") || l.endsWith(".jpeg") || l.endsWith(".png") ||
-            l.endsWith(".gif") || l.endsWith(".webp") -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-            l.endsWith(".mp4") || l.endsWith(".mkv") || l.endsWith(".avi") ||
-            l.endsWith(".mov") || l.endsWith(".webm") -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-            l.endsWith(".mp3") || l.endsWith(".wav") || l.endsWith(".ogg") ||
-            l.endsWith(".flac") || l.endsWith(".m4a") -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-            else -> MediaStore.Files.getContentUri("external")
+        for ((index, vol) in volumes.withIndex()) {
+            val card = createStorageCard(vol)
+            val params = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            if (index > 0) params.marginStart = (8 * resources.displayMetrics.density).toInt()
+            card.layoutParams = params
+            storageRow.addView(card)
         }
     }
 
-    private fun scanPath(path: String) {
-        try {
-            if (!useFileApi(path)) return
-            val f = File(path)
-            if (f.isFile) {
-                MediaScannerConnection.scanFile(this, arrayOf(f.absolutePath), null, null)
+    private fun getVolumePath(vol: StorageVolume): String? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val uuid = vol.uuid
+                if (uuid != null) {
+                    val path = "/storage/$uuid"
+                    if (File(path).exists()) return path
+                }
+            } catch (_: Exception) {}
+        }
+        return try {
+            val method = vol.javaClass.getMethod("getPath")
+            method.invoke(vol) as? String
+        } catch (e: Exception) { null }
+    }
+
+    private fun createStorageCard(vol: StorageVolumeInfo): LinearLayout {
+        val density = resources.displayMetrics.density
+        val card = LinearLayout(this)
+        card.orientation = LinearLayout.VERTICAL
+        card.setPadding((12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt())
+        card.isClickable = true
+        card.isFocusable = true
+
+        val bg = GradientDrawable()
+        bg.setColor(Color.parseColor("#2A2A2A"))
+        bg.cornerRadius = 12 * density
+        card.background = bg
+
+        val title = TextView(this)
+        title.text = vol.label
+        title.setTextColor(Color.WHITE)
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        title.setTypeface(null, android.graphics.Typeface.BOLD)
+        card.addView(title)
+
+        val info = TextView(this)
+        if (vol.totalBytes > 0) {
+            val usedGb = vol.usedBytes / (1024.0 * 1024.0 * 1024.0)
+            val totalGb = vol.totalBytes / (1024.0 * 1024.0 * 1024.0)
+            info.text = String.format("%.1f GB / %.1f GB", usedGb, totalGb)
+        } else {
+            info.text = "Info non disponibili"
+        }
+        info.setTextColor(Color.parseColor("#CCCCCC"))
+        info.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+        info.setPadding(0, (2 * density).toInt(), 0, 0)
+        card.addView(info)
+
+        card.setOnClickListener {
+            activeCategory = null
+            searchQuery = ""
+            editSearch.setText("")
+            if (vol.path.isEmpty()) {
+                requestSafForPath(rootInternal)
+            } else if (vol.path == rootInternal) {
+                openDirectoryWithSafCheck(rootInternal)
             } else {
-                f.listFiles()?.forEach { c ->
-                    if (c.isFile) {
-                        try {
-                            MediaScannerConnection.scanFile(this, arrayOf(c.absolutePath), null, null)
-                        } catch (_: Exception) {}
-                    }
-                }
+                tryAccessExternalVolume(vol.path)
             }
-        } catch (_: Exception) {}
-    }
-
-    // ============================================================
-    // CREATE FOLDER
-    // ============================================================
-
-    private fun createFolder() {
-        val input = EditText(this)
-        input.hint = "Nome cartella"
-        AlertDialog.Builder(this)
-            .setTitle("Nuova cartella")
-            .setView(input)
-            .setPositiveButton("Crea") { _, _ ->
-                val name = input.text.toString().trim()
-                if (name.isEmpty()) return@setPositiveButton
-
-                if (useFileApi(currentPath)) {
-                    try {
-                        val newDir = File(currentPath, name)
-                        if (newDir.mkdir()) {
-                            scanPath(newDir.absolutePath)
-                            Toast.makeText(this, "Cartella creata", Toast.LENGTH_SHORT).show()
-                            loadDirectory(currentPath); return@setPositiveButton
-                        }
-                    } catch (_: Exception) {}
-                }
-
-                val parent = getSafDocumentFile(currentPath)
-                if (parent != null && parent.createDirectory(name) != null) {
-                    Toast.makeText(this, "Cartella creata", Toast.LENGTH_SHORT).show()
-                    loadDirectory(currentPath)
-                } else {
-                    Toast.makeText(this, "Impossibile creare", Toast.LENGTH_SHORT).show()
-                }
-            }
-            .setNegativeButton("Annulla", null).show()
-    }
-
-    // ============================================================
-    // INFO / SHARE / OPEN
-    // ============================================================
-
-    private fun showItemInfo(item: FileItem) {
-        val info = buildString {
-            append("Percorso: ${item.path}\n")
-            if (!item.isDirectory) append("Dimensione: ${formatSize(item.size)}\n")
-            append("Modificato: ${java.util.Date(item.lastModified)}")
         }
-        AlertDialog.Builder(this)
-            .setTitle(item.name).setMessage(info)
-            .setPositiveButton("OK", null).show()
+
+        return card
     }
 
-    private fun shareFile(item: FileItem) {
+    private fun tryAccessExternalVolume(path: String) {
         try {
-            if (!item.file.exists()) {
-                Toast.makeText(this, "Condivisione USB non supportata senza permesso", Toast.LENGTH_SHORT).show()
-                return
+            val dir = File(path)
+            if (!dir.exists() || !dir.isDirectory) {
+                Toast.makeText(this, "Volume non accessibile", Toast.LENGTH_SHORT).show(); return
             }
-            val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = getMimeType(item.name)
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                clipData = ClipData.newRawUri("", uri)
-            }
-            startActivity(Intent.createChooser(intent, "Condividi con..."))
+            openDirectoryWithSafCheck(path)
         } catch (e: Exception) {
             Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun hasStoragePermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun requestStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                    data = Uri.parse("package:$packageName")
+                })
+            } catch (_: Exception) {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            }
+            Toast.makeText(this, "Attiva \"Gestisci tutti i file\"", Toast.LENGTH_LONG).show()
+        } else {
+            requestPermissions(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE), 100)
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (hasStoragePermission()) loadDirectory(currentPath)
+    }
+
+    private fun getSafDocumentFile(path: String): DocumentFile? {
+        val basePath = getSafBaseFor(path) ?: return null
+        val tree = safTreeUris[basePath] ?: return null
+        val rel = path.removePrefix(basePath).trimStart('/')
+        var doc = DocumentFile.fromTreeUri(this, tree) ?: return null
+        if (rel.isEmpty()) return doc
+        for (part in rel.split("/").filter { it.isNotEmpty() }) {
+            doc = doc.findFile(part) ?: return null
+        }
+        return doc
+    }
+
+    private fun loadDirectory(path: String, resetCategory: Boolean = false) {
+        currentPath = path
+        txtPath.text = path
+        if (resetCategory) {
+            activeCategory = null
+            searchQuery = ""
+        }
+
+        executor.execute {
+            val dir = File(path)
+            val result: List<FileItem>? = if (!dir.exists() || !dir.isDirectory) {
+                listDirViaSaf(path)
+            } else {
+                val files = dir.listFiles()
+                if (files == null) listDirViaSaf(path)
+                else {
+                    val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
+                    filtered.map { f ->
+                        FileItem(
+                            file = f,
+                            name = f.name,
+                            path = f.absolutePath,
+                            isDirectory = f.isDirectory,
+                            size = if (f.isFile) f.length() else 0L,
+                            lastModified = f.lastModified(),
+                            childrenCount = 0
+                        )
+                    }
+                }
+            }
+
+            val withCounts = result?.map { item ->
+                if (item.isDirectory) {
+                    try {
+                        val count = item.file.list()?.let { arr ->
+                            if (showHidden) arr.size else arr.count { !it.startsWith(".") }
+                        } ?: 0
+                        item.copy(childrenCount = count)
+                    } catch (_: Exception) { item }
+                } else item
+            }
+
+            mainHandler.post {
+                if (withCounts == null) {
+                    Toast.makeText(this, "Cartella non accessibile", Toast.LENGTH_SHORT).show()
+                    return@post
+                }
+                allItems = withCounts
+                applyFilters()
+                updatePasteButton()
+            }
+        }
+    }
+
+    private fun listDirViaSaf(path: String): List<FileItem>? {
+        val doc = getSafDocumentFile(path) ?: return null
+        if (!doc.isDirectory) return null
+        val files = doc.listFiles()
+        val result = mutableListOf<FileItem>()
+        for (d in files) {
+            val name = d.name ?: continue
+            if (!showHidden && name.startsWith(".")) continue
+            val isDir = d.isDirectory
+            result.add(
+                FileItem(
+                    file = File(path, name),
+                    name = name,
+                    path = "$path/$name",
+                    isDirectory = isDir,
+                    size = if (isDir) 0L else d.length(),
+                    lastModified = d.lastModified(),
+                    childrenCount = 0
+                )
+            )
+        }
+        return result
+    }
+
+    private fun applyFilters() {
+        var list = allItems.toList()
+
+        if (searchQuery.isNotEmpty()) {
+            if (currentPath == rootInternal) {
+                val results = mutableListOf<FileItem>()
+                val q = searchQuery.lowercase()
+                try {
+                    searchRecursive(File(rootInternal), q, results, 0)
+                } catch (_: Exception) {}
+                list = results
+            } else {
+                list = list.filter { it.name.lowercase().contains(searchQuery) }
+            }
+        }
+
+        if (activeCategory != null) {
+            list = list.filter { item ->
+                !item.isDirectory && categoryFor(item.name) == activeCategory
+            }
+        }
+
+        list = when (sortBy) {
+            "size" -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenByDescending { it.size })
+            "date" -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenByDescending { it.lastModified })
+            else -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenBy { it.name.lowercase() })
+        }
+
+        displayedItems = list
+        renderList()
+    }
+
+    private fun searchRecursive(dir: File, query: String, out: MutableList<FileItem>, depth: Int) {
+        if (depth > 8) return
+        val dirName = dir.name
+        if (dirName == "Android" || dirName == ".trash" || dirName == ".thumbnails") return
+
+        val files = dir.listFiles() ?: return
+        for (f in files) {
+            val name = f.name
+            if (!showHidden && name.startsWith(".")) continue
+            if (name.lowercase().contains(query)) {
+                val parentRelPath = try {
+                    dir.absolutePath.removePrefix(rootInternal).trimStart('/')
+                } catch (_: Exception) { "" }
+                val displayPath = if (parentRelPath.isEmpty()) "Memoria interna" else parentRelPath
+                out.add(
+                    FileItem(f, name, f.absolutePath, f.isDirectory,
+                        if (f.isFile) f.length() else 0L, f.lastModified(), 0, displayPath)
+                )
+            }
+            if (f.isDirectory) searchRecursive(f, query, out, depth + 1)
+        }
+    }
+
+    private fun categoryFor(name: String): String {
+        val l = name.lowercase()
+        return when {
+            l.endsWith(".jpg") || l.endsWith(".jpeg") || l.endsWith(".png") ||
+            l.endsWith(".gif") || l.endsWith(".webp") || l.endsWith(".bmp") -> "images"
+            l.endsWith(".mp3") || l.endsWith(".wav") || l.endsWith(".ogg") ||
+            l.endsWith(".flac") || l.endsWith(".m4a") || l.endsWith(".aac") -> "audio"
+            l.endsWith(".mp4") || l.endsWith(".mkv") || l.endsWith(".avi") ||
+            l.endsWith(".mov") || l.endsWith(".webm") || l.endsWith(".3gp") -> "video"
+            else -> "documents"
+        }
+    }
+
+    private fun isDocumentFile(name: String): Boolean {
+        val l = name.lowercase()
+        return listOf(".pdf",".doc",".docx",".txt",".rtf",".odt",".xls",".xlsx",".csv",".ods",".ppt",".pptx",".odp",".zip",".rar",".7z",".tar",".gz").any { l.endsWith(it) }
+    }
+
+    private fun setCategory(cat: String) {
+        if (activeCategory == cat) {
+            activeCategory = null
+            loadDirectory(rootInternal, resetCategory = true)
+            return
+        }
+
+        activeCategory = cat
+        txtPath.text = "Filtro: $cat"
+        Toast.makeText(this, "Ricerca in corso...", Toast.LENGTH_SHORT).show()
+
+        executor.execute {
+            val found = mutableListOf<FileItem>()
+            try { scanRecursive(File(rootInternal), found, cat, 0) } catch (_: Exception) {}
+            val sorted = when (sortBy) {
+                "size" -> found.sortedByDescending { it.size }
+                "date" -> found.sortedByDescending { it.lastModified }
+                else -> found.sortedBy { it.name.lowercase() }
+            }
+            mainHandler.post { displayedItems = sorted; renderList() }
+        }
+    }
+
+    private fun scanRecursive(dir: File, out: MutableList<FileItem>, cat: String, depth: Int) {
+        if (depth > 8) return
+        val dirName = dir.name
+        if (dirName == "Android" || dirName == ".trash" || dirName == ".thumbnails") return
+
+        val files = dir.listFiles() ?: return
+        for (f in files) {
+            val name = f.name
+            if (!showHidden && name.startsWith(".")) continue
+            if (f.isDirectory) scanRecursive(f, out, cat, depth + 1)
+            else {
+                val match = if (cat == "documents") isDocumentFile(name) else categoryFor(name) == cat
+                if (match) {
+                    out.add(FileItem(f, name, f.absolutePath, false, f.length(), f.lastModified(), 0))
+                }
+            }
+        }
+    }
+
+    private fun renderList() {
+        val firstVisible = try {
+            when (val lm = recycler.layoutManager) {
+                is GridLayoutManager -> lm.findFirstVisibleItemPosition()
+                is LinearLayoutManager -> lm.findFirstVisibleItemPosition()
+                else -> 0
+            }
+        } catch (_: Exception) { 0 }
+
+        recycler.layoutManager = if (isGrid) GridLayoutManager(this, 4) else LinearLayoutManager(this)
+
+        recycler.adapter = FileAdapter(
+            items = displayedItems,
+            isGrid = isGrid,
+            selectionMode = selectionMode,
+            selectedPaths = selectedPaths,
+            onClick = { item ->
+                if (selectionMode) toggleSelection(item)
+                else {
+                    if (item.isDirectory) {
+                        openDirectoryWithSafCheck(item.path)
+                    } else openFileWithDefault(item)
+                }
+            },
+            onLongClick = { item ->
+                if (selectionMode) toggleSelection(item) else enterSelectionMode(item)
+            }
+        )
+
+        if (firstVisible > 0 && displayedItems.isNotEmpty()) {
+            recycler.scrollToPosition(firstVisible)
+        }
+    }
+
+    private fun getCategoryKey(mimeType: String, fileName: String): String {
+        return when {
+            mimeType.startsWith("image/") -> "image"
+            mimeType.startsWith("video/") -> "video"
+            mimeType.startsWith("audio/") -> "audio"
+            else -> {
+                val ext = fileName.substringAfterLast('.', "").lowercase()
+                if (ext.isNotEmpty()) "ext_$ext" else "document"
+            }
         }
     }
 
@@ -1707,7 +1330,8 @@ class MainActivity : AppCompatActivity() {
                             data = Uri.parse("package:$packageName")
                         })
                     }
-                    .setNegativeButton("Annulla", null).show()
+                    .setNegativeButton("Annulla", null)
+                    .show()
                 return
             }
             val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
@@ -1759,7 +1383,6 @@ class MainActivity : AppCompatActivity() {
                 prefs.edit().putString("app_for_$categoryKey", app.activityInfo.packageName).apply()
                 openWithResolveInfo(item, app, uri, mimeType); return
             }
-
             val density = resources.displayMetrics.density
             val adapter = object : BaseAdapter() {
                 override fun getCount() = filtered.size
@@ -1787,7 +1410,8 @@ class MainActivity : AppCompatActivity() {
                     prefs.edit().putString("app_for_$categoryKey", app.activityInfo.packageName).apply()
                     openWithResolveInfo(item, app, uri, mimeType)
                 }
-                .setNegativeButton("Annulla", null).show()
+                .setNegativeButton("Annulla", null)
+                .show()
         } catch (e: Exception) {
             Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
         }
@@ -1815,18 +1439,6 @@ class MainActivity : AppCompatActivity() {
         val categoryKey = getCategoryKey(mimeType, item.name)
         prefs.edit().remove("app_for_$categoryKey").apply()
         showCustomAppPicker(item, mimeType, categoryKey)
-    }
-
-    private fun getCategoryKey(mimeType: String, fileName: String): String {
-        return when {
-            mimeType.startsWith("image/") -> "image"
-            mimeType.startsWith("video/") -> "video"
-            mimeType.startsWith("audio/") -> "audio"
-            else -> {
-                val ext = fileName.substringAfterLast('.', "").lowercase()
-                if (ext.isNotEmpty()) "ext_$ext" else "document"
-            }
-        }
     }
 
     private fun getMimeType(name: String): String {
@@ -1864,269 +1476,678 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ============================================================
-    // MENU SELEZIONE
-    // ============================================================
-
-    private fun showSelectionMoreMenu() {
-        if (selectedPaths.isEmpty()) return
-        val popup = PopupMenu(this, btnSelMore)
-        val count = selectedPaths.size
-        val allVisibleSelected = displayedItems.isNotEmpty() &&
-                displayedItems.all { selectedPaths.contains(it.path) }
-
-        if (allVisibleSelected) popup.menu.add(0, 20, 0, "Deseleziona tutto")
-        else popup.menu.add(0, 20, 0, "Seleziona tutto")
-
-        if (count == 1) {
-            val item = getSingleSelectedItem()
-            if (item != null && !item.isDirectory) {
-                popup.menu.add(0, 10, 1, "Apri")
-                popup.menu.add(0, 11, 2, "Apri con...")
-            }
-        }
-        popup.menu.add(0, 1, 3, "Taglia")
-        popup.menu.add(0, 2, 4, "Condividi")
-        popup.menu.add(0, 3, 5, "Comprimi in ZIP")
-
-        if (count == 1) {
-            val item = getSingleSelectedItem()
-            if (item != null) {
-                popup.menu.add(0, 4, 6, "Rinomina")
-                if (!item.isDirectory && item.name.lowercase().endsWith(".zip")) {
-                    popup.menu.add(0, 5, 7, "Decomprimi")
-                }
-                popup.menu.add(0, 6, 8, "Proprietà")
-            }
-        }
-
-        popup.setOnMenuItemClickListener { mi ->
-            when (mi.itemId) {
-                20 -> {
-                    if (allVisibleSelected) selectedPaths.clear()
-                    else { selectedPaths.clear(); displayedItems.forEach { selectedPaths.add(it.path) } }
-                    updateSelectionUI(); renderList()
-                }
-                10 -> { val i = getSingleSelectedItem(); if (i != null) { exitSelectionMode(); openFileWithDefault(i) } }
-                11 -> { val i = getSingleSelectedItem(); if (i != null) { exitSelectionMode(); openFileWithPicker(i) } }
-                1 -> copySelectedFiles("cut")
-                2 -> shareSelectedFiles()
-                3 -> comprimiZipSelezioneMultipla()
-                4 -> { val i = getSingleSelectedItem(); if (i != null) { exitSelectionMode(); renameItem(i) } }
-                5 -> { val i = getSingleSelectedItem(); if (i != null) { exitSelectionMode(); decomprimiZip(i) } }
-                6 -> { val i = getSingleSelectedItem(); if (i != null) { exitSelectionMode(); showItemInfo(i) } }
-            }
-            true
-        }
-        popup.show()
-    }
-
-    private fun getSingleSelectedItem(): FileItem? {
-        if (selectedPaths.size != 1) return null
-        val p = selectedPaths.first()
-        return allItems.find { it.path == p }
-    }
-
-    private fun shareSelectedFiles() {
-        if (selectedPaths.isEmpty()) return
-        if (selectedPaths.size == 1) {
-            val item = allItems.find { it.path == selectedPaths.first() }
-            if (item != null && !item.isDirectory) { shareFile(item); exitSelectionMode() }
-            else if (item != null && item.isDirectory) {
-                Toast.makeText(this, "Impossibile condividere una cartella", Toast.LENGTH_SHORT).show()
-            }
-            return
-        }
-
+    private fun shareFile(item: FileItem) {
         try {
-            val uris = ArrayList<Uri>()
-            for (path in selectedPaths) {
-                val f = File(path)
-                if (f.exists() && f.isFile) {
-                    uris.add(FileProvider.getUriForFile(this, "$packageName.provider", f))
-                }
-            }
-            if (uris.isEmpty()) {
-                Toast.makeText(this, "Nessun file da condividere", Toast.LENGTH_SHORT).show(); return
-            }
-            val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-                type = "*/*"
-                putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+            val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = getMimeType(item.name)
+                putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                clipData = ClipData.newRawUri("", uri)
             }
             startActivity(Intent.createChooser(intent, "Condividi con..."))
-            exitSelectionMode()
         } catch (e: Exception) {
             Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
     // ============================================================
-    // STORAGE CARDS
+    // COPIA/INCOLLA
     // ============================================================
 
-    private fun updateStorageCards() {
-        storageRow.removeAllViews()
-        val volumes = mutableListOf<StorageVolumeInfo>()
-
-        try {
-            val stat = StatFs(Environment.getExternalStorageDirectory().path)
-            val total = stat.blockCountLong * stat.blockSizeLong
-            val free = stat.availableBlocksLong * stat.blockSizeLong
-            volumes.add(StorageVolumeInfo("Memoria interna", rootInternal, total - free, total))
-        } catch (_: Exception) {
-            volumes.add(StorageVolumeInfo("Memoria interna", rootInternal, 0L, 0L))
+    private fun pasteFromClipboard() {
+        if (clipboardPaths.isEmpty()) {
+            Toast.makeText(this, "Niente negli appunti", Toast.LENGTH_SHORT).show()
+            return
         }
 
-        try {
-            val sm = getSystemService(STORAGE_SERVICE) as StorageManager
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                for (vol in sm.storageVolumes) {
-                    if (vol.isPrimary || !vol.isRemovable) continue
-                    val path = getVolumePath(vol)
-                    if (path != null && File(path).exists()) {
+        val srcPaths = clipboardPaths.toList()
+        val action = clipboardAction
+        val dstDir = File(currentPath)
+        val dstPath = dstDir.absolutePath
+
+        val existingSrc = srcPaths.filter { File(it).exists() }
+        if (existingSrc.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("Errore Incolla")
+                .setMessage("Nessun file originale trovato")
+                .setPositiveButton("OK", null)
+                .show()
+            clipboardPaths.clear()
+            clipboardAction = null
+            exitSelectionMode()
+            updatePasteButton()
+            return
+        }
+
+        val placeholders = mutableListOf<FileItem>()
+        val pendingCopy = mutableListOf<Pair<String, File>>()
+
+        for (srcPath in existingSrc) {
+            val src = File(srcPath)
+            var dstName = src.name
+            var dst = File(dstDir, dstName)
+            if (dst.absolutePath == src.absolutePath || dst.exists()) {
+                dstName = generateUniqueName(dstDir, src.name)
+                dst = File(dstDir, dstName)
+            }
+            placeholders.add(
+                FileItem(
+                    file = dst,
+                    name = dstName,
+                    path = dst.absolutePath,
+                    isDirectory = src.isDirectory,
+                    size = if (src.isFile) src.length() else 0L,
+                    lastModified = System.currentTimeMillis(),
+                    childrenCount = 0
+                )
+            )
+            pendingCopy.add(srcPath to dst)
+        }
+
+        val currentList = allItems.toMutableList()
+        currentList.addAll(placeholders)
+        allItems = currentList
+        applyFilters()
+
+        Toast.makeText(
+            this,
+            if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
+            Toast.LENGTH_SHORT
+        ).show()
+
+        val finalAction = action ?: "copy"
+        clipboardPaths.clear()
+        clipboardAction = null
+        exitSelectionMode()
+        updatePasteButton()
+
+        heavyExecutor.execute {
+            var copied = 0
+            var errorMsg = ""
+            val pool = Executors.newFixedThreadPool(COPY_THREADS)
+
+            try {
+                for ((index, pair) in pendingCopy.withIndex()) {
+                    val srcPath = pair.first
+                    val src = File(srcPath)
+                    val dst = placeholders[index].file
+
+                    var ok = false
+                    var renamed = false
+
+                    if (finalAction == "cut") {
                         try {
-                            val stat = StatFs(path)
-                            val total = stat.blockCountLong * stat.blockSizeLong
-                            val free = stat.availableBlocksLong * stat.blockSizeLong
-                            val label = vol.getDescription(this) ?: "Storage esterno"
-                            volumes.add(StorageVolumeInfo(label, path, total - free, total))
+                            renamed = src.renameTo(dst)
+                            ok = renamed
                         } catch (_: Exception) {}
-                    } else {
+                    }
+
+                    if (!ok) {
                         try {
-                            val label = vol.getDescription(this) ?: "Storage esterno"
-                            if (vol.state == Environment.MEDIA_MOUNTED) {
-                                volumes.add(StorageVolumeInfo(label, "", 0L, 0L))
+                            if (src.isDirectory) {
+                                copyDirectoryRecursiveParallel(src, dst, pool)
+                                ok = true
+                            } else {
+                                copyFile(src, dst)
+                                ok = true
                             }
+                        } catch (e: Exception) {
+                            errorMsg += "\n${src.name}: ${e.message}"
+                        }
+                    }
+
+                    if (!ok && src.isDirectory) {
+                        try {
+                            ok = copyDirectoryViaSaf(src, dst)
                         } catch (_: Exception) {}
+                    }
+
+                    if (!ok && src.isFile) {
+                        try {
+                            ok = copyFileViaSaf(src, dst)
+                        } catch (_: Exception) {}
+                    }
+
+                    if (ok) {
+                        copied++
+
+                        if (finalAction == "cut" && !renamed && dst.absolutePath != src.absolutePath && src.exists()) {
+                            try {
+                                var delOk = if (src.isDirectory) deleteRecursivelyFast(src) else src.delete()
+                                if (!delOk) {
+                                    delOk = deleteViaSafTree(src.absolutePath)
+                                }
+                            } catch (_: Exception) {}
+                        }
+                    }
+                }
+            } finally {
+                pool.shutdown()
+            }
+
+            if (copied > 0) {
+                scanPath(dstPath)
+            }
+
+            val finalCopied = copied
+            val finalErr = errorMsg
+
+            mainHandler.post {
+                if (finalCopied > 0) {
+                    Toast.makeText(
+                        this,
+                        if (finalAction == "cut") "Spostati $finalCopied file" else "Copiati $finalCopied file",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                } else if (finalErr.isNotEmpty()) {
+                    AlertDialog.Builder(this)
+                        .setTitle("Errore Incolla")
+                        .setMessage("Nessun file copiato.\n$finalErr")
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
+
+                if (currentPath == dstPath) {
+                    loadDirectory(currentPath)
+                }
+            }
+        }
+    }
+
+    private fun generateUniqueName(dir: File, originalName: String): String {
+        val dotIndex = originalName.lastIndexOf('.')
+        val baseName: String
+        val extension: String
+        if (dotIndex > 0) {
+            baseName = originalName.substring(0, dotIndex)
+            extension = originalName.substring(dotIndex)
+        } else {
+            baseName = originalName
+            extension = ""
+        }
+
+        var counter = 1
+        var candidate = "${baseName}_$counter$extension"
+        while (File(dir, candidate).exists()) {
+            counter++
+            candidate = "${baseName}_$counter$extension"
+        }
+        return candidate
+    }
+
+    private fun copyFileViaSaf(src: File, dst: File): Boolean {
+        return try {
+            val parentDoc = getSafDocumentFile(dst.parentFile?.absolutePath ?: "") ?: return false
+            val newFile = parentDoc.createFile(getMimeType(src.name), src.name) ?: return false
+            contentResolver.openOutputStream(newFile.uri)?.use { output ->
+                FileInputStream(src).use { input ->
+                    val buffer = ByteArray(BUFFER_SIZE)
+                    var length: Int
+                    while (input.read(buffer).also { length = it } > 0) {
+                        output.write(buffer, 0, length)
+                    }
+                    output.flush()
+                }
+            } ?: return false
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun copyDirectoryViaSaf(src: File, dst: File): Boolean {
+        return try {
+            val parentDir = dst.parentFile ?: return false
+            val parentDoc = getSafDocumentFile(parentDir.absolutePath) ?: return false
+
+            var newDir = parentDoc.findFile(dst.name)
+            if (newDir == null) {
+                newDir = parentDoc.createDirectory(dst.name)
+            }
+            if (newDir == null) return false
+
+            copyDirViaSaf(src, newDir)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun copyViaSaf(src: File, dst: File): Boolean {
+        return try {
+            val parentDir = dst.parentFile ?: return false
+            val parentDoc = getSafDocumentFile(parentDir.absolutePath) ?: return false
+
+            if (src.isDirectory) {
+                val newDir = parentDoc.createDirectory(src.name) ?: return false
+                copyDirViaSaf(src, newDir)
+                true
+            } else {
+                val mimeType = getMimeType(src.name)
+                val newFile = parentDoc.createFile(mimeType, src.name) ?: return false
+                contentResolver.openOutputStream(newFile.uri)?.use { output ->
+                    FileInputStream(src).use { input ->
+                        val buffer = ByteArray(BUFFER_SIZE)
+                        var length: Int
+                        while (input.read(buffer).also { length = it } > 0) {
+                            output.write(buffer, 0, length)
+                        }
+                        output.flush()
+                    }
+                } ?: return false
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun copyDirViaSaf(src: File, dstDoc: DocumentFile) {
+        val files = src.listFiles() ?: return
+        for (f in files) {
+            if (f.isDirectory) {
+                var newDir = dstDoc.findFile(f.name)
+                if (newDir == null) newDir = dstDoc.createDirectory(f.name)
+                if (newDir != null) copyDirViaSaf(f, newDir)
+            } else {
+                val mimeType = getMimeType(f.name)
+                var newFile = dstDoc.findFile(f.name)
+                if (newFile == null) newFile = dstDoc.createFile(mimeType, f.name)
+                if (newFile != null) {
+                    try {
+                        contentResolver.openOutputStream(newFile.uri)?.use { output ->
+                            FileInputStream(f).use { input ->
+                                val buffer = ByteArray(BUFFER_SIZE)
+                                var length: Int
+                                while (input.read(buffer).also { length = it } > 0) {
+                                    output.write(buffer, 0, length)
+                                }
+                                output.flush()
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+    }
+
+    private fun copyFile(src: File, dst: File) {
+        dst.parentFile?.mkdirs()
+
+        try {
+            FileInputStream(src).use { input ->
+                FileOutputStream(dst).use { output ->
+                    val inChannel = input.channel
+                    val outChannel = output.channel
+                    var position = 0L
+                    val size = inChannel.size()
+                    while (position < size) {
+                        position += inChannel.transferTo(position, size - position, outChannel)
                     }
                 }
             }
+            try { dst.setLastModified(src.lastModified()) } catch (_: Exception) {}
+            return
         } catch (_: Exception) {}
 
-        for ((i, vol) in volumes.withIndex()) {
-            val card = createStorageCard(vol)
-            val params = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            if (i > 0) params.marginStart = (8 * resources.displayMetrics.density).toInt()
-            card.layoutParams = params
-            storageRow.addView(card)
-        }
-    }
-
-    private fun getVolumePath(vol: StorageVolume): String? {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                val uuid = vol.uuid
-                if (uuid != null) {
-                    val p = "/storage/$uuid"
-                    if (File(p).exists()) return p
+        try {
+            FileInputStream(src).use { input ->
+                FileOutputStream(dst).use { output ->
+                    val buffer = ByteArray(BUFFER_SIZE)
+                    var length: Int
+                    while (input.read(buffer).also { length = it } > 0) {
+                        output.write(buffer, 0, length)
+                    }
+                    output.flush()
                 }
-            } catch (_: Exception) {}
-        }
-        return try {
-            val m = vol.javaClass.getMethod("getPath")
-            m.invoke(vol) as? String
-        } catch (_: Exception) { null }
+            }
+            try { dst.setLastModified(src.lastModified()) } catch (_: Exception) {}
+            return
+        } catch (_: Exception) {}
+
+        throw java.io.IOException("Impossibile copiare: ${src.absolutePath} -> ${dst.absolutePath}")
     }
 
-    private fun createStorageCard(vol: StorageVolumeInfo): LinearLayout {
-        val d = resources.displayMetrics.density
-        val card = LinearLayout(this)
-        card.orientation = LinearLayout.VERTICAL
-        card.setPadding((12 * d).toInt(), (12 * d).toInt(), (12 * d).toInt(), (12 * d).toInt())
-        card.isClickable = true
-        card.isFocusable = true
-
-        val bg = GradientDrawable()
-        bg.setColor(Color.parseColor("#2A2A2A"))
-        bg.cornerRadius = 12 * d
-        card.background = bg
-
-        val title = TextView(this)
-        title.text = vol.label
-        title.setTextColor(Color.WHITE)
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-        title.setTypeface(null, android.graphics.Typeface.BOLD)
-        card.addView(title)
-
-        val info = TextView(this)
-        if (vol.totalBytes > 0) {
-            val usedGb = vol.usedBytes / (1024.0 * 1024.0 * 1024.0)
-            val totalGb = vol.totalBytes / (1024.0 * 1024.0 * 1024.0)
-            info.text = String.format("%.1f GB / %.1f GB", usedGb, totalGb)
-        } else info.text = "Info non disponibili"
-        info.setTextColor(Color.parseColor("#CCCCCC"))
-        info.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-        info.setPadding(0, (2 * d).toInt(), 0, 0)
-        card.addView(info)
-
-        card.setOnClickListener {
-            activeCategory = null
-            searchQuery = ""
-            editSearch.setText("")
-            when {
-                vol.path.isEmpty() -> requestSafForPath(rootInternal)
-                vol.path == rootInternal -> openDirectoryWithSafCheck(rootInternal)
-                else -> openDirectoryWithSafCheck(vol.path)
+    private fun copyDirectoryRecursiveParallel(
+        src: File,
+        dst: File,
+        pool: java.util.concurrent.ExecutorService
+    ) {
+        if (!dst.exists()) {
+            if (!dst.mkdirs() && !dst.exists()) {
+                throw java.io.IOException("Impossibile creare: ${dst.absolutePath}")
             }
         }
-        return card
-    }
 
-    // ============================================================
-    // PERMESSI
-    // ============================================================
+        val files = src.listFiles()
+            ?: throw java.io.IOException("Impossibile leggere: ${src.absolutePath}")
 
-    private fun hasStoragePermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            Environment.isExternalStorageManager()
-        } else {
-            checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
-                    PackageManager.PERMISSION_GRANTED
-        }
-    }
+        val errors = Collections.synchronizedList(mutableListOf<String>())
+        val futures = mutableListOf<Future<*>>()
 
-    private fun requestStoragePermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                    data = Uri.parse("package:$packageName")
+        for (f in files) {
+            val newFile = File(dst, f.name)
+            if (f.isDirectory) {
+                futures.add(pool.submit {
+                    try {
+                        copyDirectoryRecursiveParallel(f, newFile, pool)
+                    } catch (e: Exception) {
+                        errors.add("${f.name}: ${e.message}")
+                    }
                 })
-            } catch (_: Exception) {
-                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            } else {
+                futures.add(pool.submit {
+                    try {
+                        copyFile(f, newFile)
+                    } catch (e: Exception) {
+                        errors.add("${f.name}: ${e.message}")
+                    }
+                })
             }
-            Toast.makeText(this, "Attiva \"Gestisci tutti i file\"", Toast.LENGTH_LONG).show()
-        } else {
-            requestPermissions(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE), 100)
+        }
+
+        for (future in futures) {
+            try { future.get() } catch (_: Exception) {}
+        }
+
+        if (errors.isNotEmpty()) {
+            throw java.io.IOException("Errori:\n${errors.joinToString("\n")}")
         }
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (hasStoragePermission()) loadDirectory(currentPath)
-    }
+    private fun comprimiZip(item: FileItem) {
+        val zipName = if (item.isDirectory) "${item.name}.zip" else item.name.substringBeforeLast(".") + ".zip"
+        if (File(currentPath, zipName).exists()) {
+            Toast.makeText(this, "Esiste già: $zipName", Toast.LENGTH_LONG).show(); return
+        }
+        Toast.makeText(this, "Compressione in corso...", Toast.LENGTH_SHORT).show()
 
-    // ============================================================
-    // NAVIGAZIONE / SETTINGS
-    // ============================================================
+        heavyExecutor.execute {
+            var ok = false
+            var errorMsg = ""
 
-    private fun goBack() {
-        if (selectionMode) { exitSelectionMode(); return }
-        if (currentPath == rootInternal) return
-        val parent = File(currentPath).parent
-        if (parent != null && parent.startsWith(rootInternal)) {
-            openDirectoryWithSafCheck(parent)
-        } else if (currentPath.startsWith("/storage/") || currentPath.startsWith("/mnt/")) {
-            val vroot = getVolumeRootFor(currentPath)
-            if (currentPath == vroot) loadDirectory(rootInternal, resetCategory = true)
-            else openDirectoryWithSafCheck(parent ?: rootInternal)
+            try {
+                ok = comprimiZipViaSaf(item, zipName)
+                if (!ok) errorMsg = "SAF: compressione fallita"
+            } catch (e: Exception) { ok = false; errorMsg = "SAF: ${e.message}" }
+
+            if (!ok) {
+                val zipFile = File(currentPath, zipName)
+                try {
+                    ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
+                        if (item.isDirectory) addDirectoryToZip(item.file, item.file.name, zos)
+                        else addFileToZip(item.file, item.file.name, zos)
+                    }
+                    ok = true; errorMsg = ""
+                } catch (e: Exception) {
+                    ok = false; errorMsg += " | File: ${e.message}"
+                    try { zipFile.delete() } catch (_: Exception) {}
+                }
+            }
+
+            if (ok) scanPath(File(currentPath, zipName).absolutePath)
+
+            mainHandler.post {
+                if (ok) {
+                    Toast.makeText(this, "Creato: $zipName", Toast.LENGTH_SHORT).show()
+                    loadDirectory(currentPath)
+                } else {
+                    AlertDialog.Builder(this)
+                        .setTitle("Errore Compressione")
+                        .setMessage("File: ${item.name}\n\nErrore:\n$errorMsg")
+                        .setPositiveButton("OK", null).show()
+                }
+            }
         }
     }
 
-    override fun onBackPressed() {
-        if (selectionMode) exitSelectionMode()
-        else if (currentPath != rootInternal) goBack()
-        else super.onBackPressed()
+    private fun comprimiZipViaSaf(item: FileItem, zipName: String): Boolean {
+        return try {
+            val parentDir = File(currentPath)
+            val parentDoc = getSafDocumentFile(parentDir.absolutePath) ?: return false
+            val newZipDoc = parentDoc.createFile("application/zip", zipName) ?: return false
+            val outputStream = contentResolver.openOutputStream(newZipDoc.uri) ?: return false
+            ZipOutputStream(outputStream).use { zos ->
+                if (item.isDirectory) addDirectoryToZip(item.file, item.file.name, zos)
+                else addFileToZip(item.file, item.file.name, zos)
+            }
+            true
+        } catch (_: Exception) { false }
+    }
+
+    private fun addDirectoryToZip(dir: File, basePath: String, zos: ZipOutputStream) {
+        val files = dir.listFiles() ?: return
+        for (f in files) {
+            val entryName = "$basePath/${f.name}"
+            if (f.isDirectory) addDirectoryToZip(f, entryName, zos) else addFileToZip(f, entryName, zos)
+        }
+    }
+
+    private fun addFileToZip(file: File, entryName: String, zos: ZipOutputStream) {
+        FileInputStream(file).use { fis ->
+            zos.putNextEntry(ZipEntry(entryName))
+            val buffer = ByteArray(ZIP_BUFFER_SIZE)
+            var length: Int
+            while (fis.read(buffer).also { length = it } > 0) {
+                zos.write(buffer, 0, length)
+            }
+            zos.closeEntry()
+        }
+    }
+
+    private fun decomprimiZip(item: FileItem) {
+        if (!item.name.lowercase().endsWith(".zip")) {
+            Toast.makeText(this, "Non è un file ZIP", Toast.LENGTH_SHORT).show(); return
+        }
+        val zipSource = item.file
+        if (!zipSource.exists()) {
+            Toast.makeText(this, "File non trovato: ${item.name}", Toast.LENGTH_LONG).show(); return
+        }
+        val baseName = item.name.substringBeforeLast(".")
+        Toast.makeText(this, "Decompressione in corso...", Toast.LENGTH_SHORT).show()
+
+        heavyExecutor.execute {
+            var filesExtracted = 0
+            var errorMsg = ""
+            try {
+                val parentDoc = getSafDocumentFile(currentPath)
+                val extractDir = File(currentPath, baseName)
+                if (!extractDir.exists()) extractDir.mkdirs()
+
+                ZipInputStream(FileInputStream(zipSource)).use { zis ->
+                    var entry: ZipEntry? = zis.nextEntry
+                    while (entry != null) {
+                        val entryName = entry.name
+                        val outFile = File(extractDir, entryName)
+                        if (!outFile.canonicalPath.startsWith(extractDir.canonicalPath)) {
+                            zis.closeEntry(); entry = zis.nextEntry; continue
+                        }
+                        if (entry.isDirectory) {
+                            outFile.mkdirs()
+                        } else {
+                            outFile.parentFile?.mkdirs()
+                            var written = false
+                            try {
+                                FileOutputStream(outFile).use { fos ->
+                                    val buffer = ByteArray(ZIP_BUFFER_SIZE)
+                                    var length: Int
+                                    while (zis.read(buffer).also { length = it } > 0) {
+                                        fos.write(buffer, 0, length)
+                                    }
+                                    fos.flush()
+                                }
+                                written = true
+                            } catch (_: Exception) {}
+                            if (!written && parentDoc != null) written = tryWriteViaSaf(parentDoc, entryName, zis)
+                            if (written) filesExtracted++
+                        }
+                        zis.closeEntry()
+                        entry = zis.nextEntry
+                    }
+                }
+            } catch (e: Exception) { errorMsg = e.message ?: e.toString() }
+
+            if (filesExtracted > 0) scanPath(File(currentPath, baseName).absolutePath)
+
+            val extracted = filesExtracted
+            val err = errorMsg
+            mainHandler.post {
+                if (extracted > 0) {
+                    Toast.makeText(this, "Estratti $extracted file in: $baseName/", Toast.LENGTH_SHORT).show()
+                    loadDirectory(currentPath)
+                } else {
+                    AlertDialog.Builder(this)
+                        .setTitle("Errore Decompressione")
+                        .setMessage("File: ${item.name}\n\nNessun file estratto.\n$err")
+                        .setPositiveButton("OK", null).show()
+                }
+            }
+        }
+    }
+
+    private fun tryWriteViaSaf(parentDoc: DocumentFile, entryName: String, zis: ZipInputStream): Boolean {
+        return try {
+            val parts = entryName.split("/").filter { it.isNotEmpty() }
+            if (parts.isEmpty()) return false
+            val fileName = parts.last()
+            val folderParts = if (parts.size > 1) parts.dropLast(1) else emptyList()
+            var currentDoc = parentDoc
+            for (part in folderParts) {
+                var next = currentDoc.findFile(part)
+                if (next == null) next = currentDoc.createDirectory(part)
+                if (next == null) return false
+                currentDoc = next
+            }
+            val newFile = currentDoc.createFile("application/octet-stream", fileName) ?: return false
+            val outputStream = contentResolver.openOutputStream(newFile.uri) ?: return false
+            outputStream.use { fos ->
+                val buffer = ByteArray(ZIP_BUFFER_SIZE)
+                var length: Int
+                while (zis.read(buffer).also { length = it } > 0) {
+                    fos.write(buffer, 0, length)
+                }
+                fos.flush()
+            }
+            true
+        } catch (_: Exception) { false }
+    }
+
+    private fun renameItem(item: FileItem) {
+        val input = EditText(this)
+        input.setText(item.name)
+        AlertDialog.Builder(this)
+            .setTitle("Rinomina")
+            .setView(input)
+            .setPositiveButton("OK") { _, _ ->
+                val newName = input.text.toString().trim()
+                if (newName.isEmpty() || newName == item.name) return@setPositiveButton
+                try {
+                    val newFile = File(item.file.parentFile, newName)
+                    if (item.file.renameTo(newFile)) {
+                        updateInMediaStore(item.path, newFile.absolutePath)
+                        scanPath(newFile.absolutePath)
+                        Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
+                        loadDirectory(currentPath); return@setPositiveButton
+                    }
+                } catch (_: Exception) {}
+
+                val doc = getSafDocumentFile(item.path)
+                if (doc != null && doc.renameTo(newName)) {
+                    Toast.makeText(this, "Rinominato (SAF)", Toast.LENGTH_SHORT).show()
+                    loadDirectory(currentPath)
+                    return@setPositiveButton
+                }
+
+                if (!hasSafFor(item.path)) {
+                    requestSafForPath(item.path) {
+                        Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Annulla", null).show()
+    }
+
+    private fun updateInMediaStore(oldPath: String, newPath: String) {
+        try {
+            if (File(newPath).isDirectory) return
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DATA, newPath)
+                put(MediaStore.MediaColumns.DISPLAY_NAME, File(newPath).name)
+                put(MediaStore.MediaColumns.TITLE, File(newPath).name)
+            }
+            contentResolver.update(getMediaStoreUri(oldPath), values, "${MediaStore.MediaColumns.DATA} = ?", arrayOf(oldPath))
+        } catch (_: Exception) {}
+    }
+
+    private fun getMediaStoreUri(path: String): Uri {
+        val l = path.lowercase()
+        return when {
+            l.endsWith(".jpg") || l.endsWith(".jpeg") || l.endsWith(".png") ||
+            l.endsWith(".gif") || l.endsWith(".webp") -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            l.endsWith(".mp4") || l.endsWith(".mkv") || l.endsWith(".avi") ||
+            l.endsWith(".mov") || l.endsWith(".webm") -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            l.endsWith(".mp3") || l.endsWith(".wav") || l.endsWith(".ogg") ||
+            l.endsWith(".flac") || l.endsWith(".m4a") -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+            else -> MediaStore.Files.getContentUri("external")
+        }
+    }
+
+    private fun scanPath(path: String) {
+        try {
+            val intent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
+            intent.data = Uri.fromFile(File(path))
+            sendBroadcast(intent)
+        } catch (_: Exception) {}
+    }
+
+    private fun showItemInfo(item: FileItem) {
+        val info = buildString {
+            append("Percorso: ${item.path}\n")
+            if (!item.isDirectory) append("Dimensione: ${formatSize(item.size)}\n")
+            append("Modificato: ${java.util.Date(item.lastModified)}")
+        }
+        AlertDialog.Builder(this)
+            .setTitle(item.name).setMessage(info)
+            .setPositiveButton("OK", null).show()
+    }
+
+    private fun createFolder() {
+        val input = EditText(this)
+        input.hint = "Nome cartella"
+        AlertDialog.Builder(this)
+            .setTitle("Nuova cartella")
+            .setView(input)
+            .setPositiveButton("Crea") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isEmpty()) return@setPositiveButton
+                try {
+                    val newDir = File(currentPath, name)
+                    if (newDir.mkdir()) {
+                        scanPath(newDir.absolutePath)
+                        Toast.makeText(this, "Cartella creata", Toast.LENGTH_SHORT).show()
+                        loadDirectory(currentPath); return@setPositiveButton
+                    }
+                } catch (_: Exception) {}
+
+                val parent = getSafDocumentFile(currentPath)
+                if (parent != null && parent.createDirectory(name) != null) {
+                    Toast.makeText(this, "Cartella creata (SAF)", Toast.LENGTH_SHORT).show()
+                    loadDirectory(currentPath)
+                    return@setPositiveButton
+                }
+
+                if (!hasSafFor(currentPath)) {
+                    requestSafForPath(currentPath) {
+                        Toast.makeText(this, "Impossibile creare", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    Toast.makeText(this, "Impossibile creare", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Annulla", null).show()
     }
 
     private fun showSortDialog() {
@@ -2134,10 +2155,12 @@ class MainActivity : AppCompatActivity() {
         val current = when (sortBy) { "size" -> 1; "date" -> 2; else -> 0 }
         AlertDialog.Builder(this)
             .setTitle("Ordina per")
-            .setSingleChoiceItems(options, current) { dlg, which ->
+            .setSingleChoiceItems(options, current) { dialog, which ->
                 sortBy = when (which) { 1 -> "size"; 2 -> "date"; else -> "name" }
                 prefs.edit().putString("sort_by", sortBy).apply()
-                updateSortLabel(); applyFilters(); dlg.dismiss()
+                updateSortLabel()
+                applyFilters()
+                dialog.dismiss()
             }.show()
     }
 
@@ -2149,7 +2172,8 @@ class MainActivity : AppCompatActivity() {
     private fun toggleView() {
         isGrid = !isGrid
         prefs.edit().putBoolean("is_grid", isGrid).apply()
-        updateViewToggleIcon(); renderList()
+        updateViewToggleIcon()
+        renderList()
     }
 
     private fun showSettingsDialog() {
@@ -2164,35 +2188,39 @@ class MainActivity : AppCompatActivity() {
             .setTitle("Impostazioni")
             .setItems(options.toTypedArray()) { _, which ->
                 when (which) {
-                    0 -> { loadDirectory(currentPath) }
+                    0 -> { Toast.makeText(this, "Aggiornamento...", Toast.LENGTH_SHORT).show(); loadDirectory(currentPath) }
                     1 -> {
                         showHidden = !showHidden
                         prefs.edit().putBoolean("show_hidden", showHidden).apply()
                         loadDirectory(currentPath)
                     }
                     2 -> {
-                        val vroot = getVolumeRootFor(currentPath)
-                        safTreeUris.remove(vroot); saveSafTreeUris()
+                        val volumeRoot = getVolumeRootFor(currentPath)
+                        safTreeUris.remove(volumeRoot)
+                        saveSafTreeUris()
                         requestSafForPath(currentPath) {
                             Toast.makeText(this, "Permesso rinnovato", Toast.LENGTH_SHORT).show()
                         }
                     }
                     3 -> {
                         try {
-                            for (p in contentResolver.persistedUriPermissions) {
+                            for (perm in contentResolver.persistedUriPermissions) {
                                 contentResolver.releasePersistableUriPermission(
-                                    p.uri,
-                                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                                    perm.uri,
+                                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                                )
                             }
                         } catch (_: Exception) {}
-                        safTreeUris.clear(); saveSafTreeUris()
+                        safTreeUris.clear()
+                        saveSafTreeUris()
                         prefs.edit().remove(PREFS_SAF_INTERNAL_REQUESTED).apply()
                         Toast.makeText(this, "Permessi rimossi", Toast.LENGTH_SHORT).show()
                         loadDirectory(rootInternal, resetCategory = true)
                     }
                     4 -> {
                         prefs.edit().remove(PREFS_SAF_INTERNAL_REQUESTED).apply()
-                        safTreeUris.remove(rootInternal); saveSafTreeUris()
+                        safTreeUris.remove(rootInternal)
+                        saveSafTreeUris()
                         requestSafForPath(rootInternal) {
                             Toast.makeText(this, "Permesso rinnovato", Toast.LENGTH_SHORT).show()
                         }
@@ -2210,8 +2238,32 @@ class MainActivity : AppCompatActivity() {
         return String.format("%.1f GB", mb / 1024.0)
     }
 
+    private fun goBack() {
+        if (selectionMode) { exitSelectionMode(); return }
+        if (currentPath == rootInternal) return
+        val parent = File(currentPath).parent
+        if (parent != null && parent.startsWith(rootInternal)) {
+            openDirectoryWithSafCheck(parent)
+        } else if (currentPath.startsWith("/storage/") || currentPath.startsWith("/mnt/")) {
+            val volumeRoot = getVolumeRootFor(currentPath)
+            if (currentPath == volumeRoot) {
+                loadDirectory(rootInternal, resetCategory = true)
+            } else {
+                openDirectoryWithSafCheck(parent ?: rootInternal)
+            }
+        }
+    }
+
+    override fun onBackPressed() {
+        if (selectionMode) exitSelectionMode()
+        else if (currentPath != rootInternal) goBack()
+        else super.onBackPressed()
+    }
+
     data class StorageVolumeInfo(
-        val label: String, val path: String,
-        val usedBytes: Long, val totalBytes: Long
+        val label: String,
+        val path: String,
+        val usedBytes: Long,
+        val totalBytes: Long
     )
 }
