@@ -1487,42 +1487,55 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun writeEntryToSaf(
-        parentDoc: DocumentFile,
-        baseName: String,
-        entryName: String,
-        isDirectory: Boolean,
-        zis: ZipInputStream
-    ): Boolean {
-        return try {
-            var base = parentDoc.findFile(baseName) ?: parentDoc.createDirectory(baseName)
-            if (base == null) return false
+    parentDoc: DocumentFile,
+    baseName: String,
+    entryName: String,
+    isDirectory: Boolean,
+    zis: ZipInputStream
+): Boolean {
+    return try {
+        var base = parentDoc.findFile(baseName)
+        if (base == null) {
+            base = parentDoc.createDirectory(baseName)
+        }
+        if (base == null) return false
+        val safeBase: DocumentFile = base
 
-            val parts = entryName.split("/").filter { it.isNotEmpty() }
-            if (parts.isEmpty()) return false
-            val fileName = parts.last()
-            val folders = parts.dropLast(1)
-            var cur = base
-            for (folder in folders) {
-                var next = cur.findFile(folder)
-                if (next == null) next = cur.createDirectory(folder)
-                if (next == null) return false
-                cur = next
+        val parts = entryName.split("/").filter { it.isNotEmpty() }
+        if (parts.isEmpty()) return false
+        val fileName = parts.last()
+        val folders = parts.dropLast(1)
+
+        var cur: DocumentFile = safeBase
+        for (folder in folders) {
+            var next = cur.findFile(folder)
+            if (next == null) {
+                next = cur.createDirectory(folder)
             }
-            if (isDirectory) {
-                cur.createDirectory(fileName)
-                return true
-            }
-            val newFile = cur.createFile(getMimeType(fileName), fileName) ?: return false
-            val out = contentResolver.openOutputStream(newFile.uri) ?: return false
-            out.use { os ->
-                val buf = ByteArray(ZIP_BUFFER_SIZE)
-                var len: Int
-                while (zis.read(buf).also { len = it } > 0) os.write(buf, 0, len)
-                os.flush()
-            }
-            true
-        } catch (_: Exception) { false }
-    }
+            if (next == null) return false
+            val safeNext: DocumentFile = next
+            cur = safeNext
+        }
+
+        if (isDirectory) {
+            cur.createDirectory(fileName)
+            return true
+        }
+
+        val newFile = cur.createFile(getMimeType(fileName), fileName)
+        if (newFile == null) return false
+        val safeFile: DocumentFile = newFile
+
+        val out = contentResolver.openOutputStream(safeFile.uri) ?: return false
+        out.use { os ->
+            val buf = ByteArray(ZIP_BUFFER_SIZE)
+            var len: Int
+            while (zis.read(buf).also { len = it } > 0) os.write(buf, 0, len)
+            os.flush()
+        }
+        true
+    } catch (_: Exception) { false }
+}
 
     // ============================================================
     // RENAME
