@@ -58,7 +58,6 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val REQ_SAF = 1001
-        private const val REQ_SAF_USB_PASTE = 1002
         private const val BUFFER_SIZE = 65536
         private const val ZIP_BUFFER_SIZE = 32768
         private val COPY_THREADS = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(4, 8)
@@ -103,13 +102,12 @@ class MainActivity : AppCompatActivity() {
     private var selectionMode: Boolean = false
     private val selectedPaths = mutableSetOf<String>()
 
-    private var safTreeUri: Uri? = null
+    // SAF tree URI per ogni volume. La USB deve avere il proprio tree URI:
+    // /storage/XXXX-XXXX -> content://com.android.externalstorage.documents/tree/XXXX-XXXX%3A
+    private val safTreeUris = mutableMapOf<String, Uri>()
+    private var safTreeUri: Uri? = null // compatibilità con il codice esistente
     private var pendingSafAction: (() -> Unit)? = null
-
-    // ===== USB: mappa volume -> tree URI =====
-    private val safTreeMap = mutableMapOf<String, Uri>()
-    // Path di destinazione in attesa di permesso SAF (per il paste)
-    private var pendingUsbPasteAfterSaf: Boolean = false
+    private var pendingSafPath: String? = null
 
     private val executor = Executors.newSingleThreadExecutor()
     private val heavyExecutor = Executors.newSingleThreadExecutor()
@@ -153,17 +151,15 @@ class MainActivity : AppCompatActivity() {
         sortBy = prefs.getString("sort_by", "name") ?: "name"
 
         currentPath = rootInternal
-        safTreeUri = prefs.getString("saf_tree_uri", null)?.let { Uri.parse(it) }
-
-        // USB: carica i permessi SAF salvati per volumi esterni
-        for (key in prefs.all.keys) {
-            if (key.startsWith("saf_tree_/storage/") || key.startsWith("saf_tree_/mnt/")) {
-                val volumePath = key.removePrefix("saf_tree_")
-                prefs.getString(key, null)?.let { uriStr ->
-                    safTreeMap[volumePath] = Uri.parse(uriStr)
-                }
-            }
+        // Migrazione del vecchio permesso SAF: era valido solo per il volume a cui apparteneva.
+        prefs.getString("saf_tree_uri", null)?.let { raw ->
+            try {
+                val uri = Uri.parse(raw)
+                val key = safVolumeKeyFromTreeUri(uri)
+                if (key != null) safTreeUris[key] = uri
+            } catch (_: Exception) {}
         }
+        loadSavedSafUris()
 
         recycler = findViewById(R.id.recyclerFiles)
         txtPath = findViewById(R.id.txtPath)
@@ -229,13 +225,11 @@ class MainActivity : AppCompatActivity() {
         if (hasStoragePermission()) {
             loadDirectory(currentPath)
 
-            if (safTreeUri == null && !prefs.getBoolean("saf_requested", false)) {
+            // Non chiediamo più automaticamente il SAF per una USB non selezionata:
+            // il permesso viene richiesto quando l'utente entra/modifica quel volume.
+            if (getSafTreeForPath(rootInternal) == null && !prefs.getBoolean("saf_requested", false)) {
                 prefs.edit().putBoolean("saf_requested", true).apply()
-                requestSaf {
-                    Toast.makeText(this, "Permesso completo concesso", Toast.LENGTH_SHORT).show()
-                    updateStorageCards()
-                    loadDirectory(currentPath)
-                }
+                requestSafForPath(rootInternal)
             }
         }
         updateStorageCards()
@@ -389,24 +383,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ===== USB: delete via SAF (memoria interna usa safTreeUri, USB usa safTreeMap) =====
     private fun deleteViaSafTree(path: String): Boolean {
-        // Prova prima il volume corretto (USB o interno)
-        val doc = getSafDocumentFile(path)
-        if (doc != null) {
-            return deleteDocumentRecursive(doc)
-        }
-
-        // Fallback: comportamento originale (solo memoria interna)
-        val tree = safTreeUri ?: return false
         return try {
-            val rel = path.removePrefix(rootInternal).trimStart('/')
-            if (rel.isEmpty()) return false
-
-            val treeDocId = DocumentsContract.getTreeDocumentId(tree)
-            val docId = "$treeDocId/$rel"
-            val docUri = DocumentsContract.buildDocumentUriUsingTree(tree, docId)
-            DocumentsContract.deleteDocument(contentResolver, docUri)
+            val doc = getSafDocumentFile(path) ?: return false
+            deleteDocumentRecursive(doc)
         } catch (_: Exception) {
             false
         }
@@ -695,9 +675,7 @@ class MainActivity : AppCompatActivity() {
                             try {
                                 val label = vol.getDescription(this) ?: "Storage esterno"
                                 if (vol.state == Environment.MEDIA_MOUNTED) {
-                                    val uuid = vol.uuid
-                                    val guess = if (uuid != null) "/storage/$uuid" else ""
-                                    volumes.add(StorageVolumeInfo(label, guess, 0L, 0L))
+                                    volumes.add(StorageVolumeInfo(label, "", 0L, 0L))
                                 }
                             } catch (_: Exception) {}
                         }
@@ -802,232 +780,145 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestSafForPath(path: String) {
+        val existing = getSafTreeForPath(path)
+        if (existing != null) {
+            safTreeUri = existing
+            pendingSafPath = null
+            pendingSafAction?.invoke()
+            pendingSafAction = null
+            return
+        }
+
+        pendingSafPath = path
         try {
+            val initialUri = buildInitialSafUri(path)
             startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                if (initialUri != null) {
+                    putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri)
+                }
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                 addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
             }, REQ_SAF)
-            pendingSafAction = { updateStorageCards(); loadDirectory(path, resetCategory = true) }
         } catch (e: Exception) {
             Toast.makeText(this, "Errore apertura SAF: ${e.message}", Toast.LENGTH_LONG).show()
+            pendingSafPath = null
+            pendingSafAction = null
         }
     }
 
-    private fun hasStoragePermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            Environment.isExternalStorageManager()
-        } else {
-            checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
-                    android.content.pm.PackageManager.PERMISSION_GRANTED
-        }
-    }
-
-    private fun requestStoragePermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                    data = Uri.parse("package:$packageName")
-                })
-            } catch (_: Exception) {
-                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+    private fun loadSavedSafUris() {
+        for ((key, value) in prefs.all) {
+            if (key.startsWith("saf_tree_uri_")) {
+                val raw = value as? String ?: continue
+                try {
+                    safTreeUris[key.removePrefix("saf_tree_uri_")] = Uri.parse(raw)
+                } catch (_: Exception) {}
             }
-            Toast.makeText(this, "Attiva \"Gestisci tutti i file\"", Toast.LENGTH_LONG).show()
-        } else {
-            requestPermissions(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE), 100)
         }
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (hasStoragePermission()) loadDirectory(currentPath)
+    private fun volumeKey(path: String): String {
+        val normalized = path.trimEnd('/')
+        if (normalized == rootInternal || normalized.startsWith(rootInternal + "/")) return "primary"
+        val prefix = "/storage/"
+        if (normalized.startsWith(prefix)) {
+            return normalized.removePrefix(prefix).substringBefore('/').lowercase()
+        }
+        return normalized.substringBefore('/').lowercase()
+    }
+
+    private fun safVolumeKeyFromTreeUri(uri: Uri): String? {
+        return try {
+            val docId = DocumentsContract.getTreeDocumentId(uri)
+            val volume = docId.substringBefore(':')
+            if (volume.equals("primary", true)) "primary" else volume.lowercase()
+        } catch (_: Exception) { null }
+    }
+
+    private fun getSafTreeForPath(path: String): Uri? {
+        val key = volumeKey(path)
+        return safTreeUris[key] ?: if (key == "primary") safTreeUri else null
+    }
+
+    private fun buildInitialSafUri(path: String): Uri? {
+        val key = volumeKey(path)
+        val rootId = if (key == "primary") "primary:" else "$key:"
+        return try {
+            Uri.parse("content://com.android.externalstorage.documents/root/${Uri.encode(rootId)}")
+        } catch (_: Exception) { null }
     }
 
     private fun requestSaf(onGranted: () -> Unit) {
-        if (safTreeUri != null) { onGranted(); return }
-        pendingSafAction = onGranted
-        val uri = Uri.parse("content://com.android.externalstorage.documents/root/primary")
-        try {
-            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-                putExtra(DocumentsContract.EXTRA_INITIAL_URI, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-            }, REQ_SAF)
-        } catch (_: Exception) {
-            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-            }, REQ_SAF)
-        }
-    }
-
-    // ===== USB: richiesta SAF per il paste, apre sulla radice del volume =====
-    private fun requestSafForUsbPaste(volumePath: String) {
-        try {
-            val storageManager = getSystemService(STORAGE_SERVICE) as StorageManager
-            val targetVolume: StorageVolume? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                storageManager.storageVolumes.find { vol ->
-                    if (vol.isPrimary) return@find false
-                    val volPath = getVolumePath(vol)
-                    volPath != null && (volPath == volumePath ||
-                            volPath.startsWith(volumePath) ||
-                            volumePath.startsWith(volPath))
-                }
-            } else null
-
-            val intent: Intent = if (targetVolume != null) {
-                // Metodo ufficiale: apre il picker direttamente sulla radice del volume
-                targetVolume.createOpenDocumentTreeIntent()
-            } else {
-                Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
-            }
-
-            intent.addFlags(
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
-                Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
-            )
-
-            startActivityForResult(intent, REQ_SAF_USB_PASTE)
-        } catch (e: Exception) {
-            Toast.makeText(this, "Errore apertura SAF: ${e.message}", Toast.LENGTH_LONG).show()
-            pendingUsbPasteAfterSaf = false
-        }
-    }
-
-    // ===== USB: estrae il volume da un path (/storage/XXXX-XXXX/...) =====
-    private fun extractVolumePath(path: String): String? {
-        val parts = path.split("/").filter { it.isNotEmpty() }
-        if (parts.size < 2) return null
-        if (parts[0] == "storage") {
-            return if (parts.size >= 3 && parts[1] == "emulated") "/storage/emulated/${parts[2]}"
-            else "/storage/${parts[1]}"
-        }
-        if (parts[0] == "mnt" && parts.size >= 3 && parts[1] == "media_rw")
-            return "/mnt/media_rw/${parts[2]}"
-        return null
+        requestSafForPath(currentPath, onGranted)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_SAF) {
+            val uri = data?.data
+            if (resultCode == Activity.RESULT_OK && uri != null) {
+                try {
+                    contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
 
-        // ===== USB: risultato permesso SAF richiesto durante il paste =====
-        if (requestCode == REQ_SAF_USB_PASTE) {
-            if (resultCode == Activity.RESULT_OK) {
-                val uri = data?.data
-                if (uri != null) {
-                    try {
-                        contentResolver.takePersistableUriPermission(uri,
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                    val key = safVolumeKeyFromTreeUri(uri) ?: volumeKey(pendingSafPath ?: currentPath)
+                    safTreeUris[key] = uri
+                    if (key == "primary") safTreeUri = uri
 
-                        // Determina il volume dall'URI
-                        val treeDocId = DocumentsContract.getTreeDocumentId(uri)
-                        val colon = treeDocId.indexOf(':')
-                        if (colon > 0) {
-                            val uuid = treeDocId.substring(0, colon)
-                            if (uuid != "primary") {
-                                val vp = "/storage/$uuid"
-                                safTreeMap[vp] = uri
-                                prefs.edit().putString("saf_tree_$vp", uri.toString()).apply()
-                            }
-                        }
+                    prefs.edit()
+                        .putString("saf_tree_uri_$key", uri.toString())
+                        .putString("saf_tree_uri", if (key == "primary") uri.toString() else (prefs.getString("saf_tree_uri", null) ?: uri.toString()))
+                        .apply()
 
-                        Toast.makeText(this, "Permesso USB concesso", Toast.LENGTH_SHORT).show()
-
-                        // Riprendi il paste
-                        if (pendingUsbPasteAfterSaf) {
-                            pendingUsbPasteAfterSaf = false
-                            mainHandler.postDelayed({ pasteFromClipboard() }, 200)
-                        }
-                    } catch (e: Exception) {
-                        Toast.makeText(this, "Errore permesso: ${e.message}", Toast.LENGTH_LONG).show()
-                        pendingUsbPasteAfterSaf = false
-                    }
+                    Toast.makeText(this, "Permesso di scrittura concesso", Toast.LENGTH_SHORT).show()
+                    pendingSafAction?.invoke()
+                    pendingSafAction = null
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Errore permesso: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             } else {
-                // Utente ha annullato
-                pendingUsbPasteAfterSaf = false
-                Toast.makeText(this, "Permesso negato", Toast.LENGTH_SHORT).show()
+                pendingSafAction = null
             }
+            pendingSafPath = null
+        }
+    }
+
+    private fun getSafDocumentFile(path: String): DocumentFile? {
+        val tree = getSafTreeForPath(path) ?: return null
+        val volumeRoot = when (volumeKey(path)) {
+            "primary" -> rootInternal
+            else -> "/storage/${volumeKey(path)}"
+        }.trimEnd('/')
+
+        val normalizedPath = path.trimEnd('/')
+        val rel = when {
+            normalizedPath == volumeRoot -> ""
+            normalizedPath.startsWith(volumeRoot + "/") -> normalizedPath.removePrefix(volumeRoot + "/")
+            else -> return null
+        }
+
+        var doc = DocumentFile.fromTreeUri(this, tree) ?: return null
+        if (rel.isEmpty()) return doc
+
+        for (part in rel.split('/').filter { it.isNotEmpty() }) {
+            doc = doc.findFile(part) ?: return null
+        }
+        return doc
+    }
+
+
+    private fun requestSafForPath(path: String, onGranted: () -> Unit) {
+        if (getSafTreeForPath(path) != null) {
+            onGranted()
             return
         }
-
-        // ===== SAF esistente (memoria interna / navigazione USB) =====
-        if (requestCode == REQ_SAF && resultCode == Activity.RESULT_OK) {
-            val uri = data?.data ?: return
-            try {
-                contentResolver.takePersistableUriPermission(uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-
-                // Rileva se l'URI è per un volume USB o per la memoria interna
-                val treeDocId = DocumentsContract.getTreeDocumentId(uri)
-                val colon = treeDocId.indexOf(':')
-                if (colon > 0) {
-                    val uuid = treeDocId.substring(0, colon)
-                    if (uuid != "primary") {
-                        val vp = "/storage/$uuid"
-                        safTreeMap[vp] = uri
-                        prefs.edit().putString("saf_tree_$vp", uri.toString()).apply()
-                        Toast.makeText(this, "Permesso USB concesso", Toast.LENGTH_SHORT).show()
-                    } else {
-                        safTreeUri = uri
-                        prefs.edit().putString("saf_tree_uri", uri.toString()).apply()
-                        Toast.makeText(this, "Permesso concesso", Toast.LENGTH_SHORT).show()
-                    }
-                } else {
-                    safTreeUri = uri
-                    prefs.edit().putString("saf_tree_uri", uri.toString()).apply()
-                    Toast.makeText(this, "Permesso concesso", Toast.LENGTH_SHORT).show()
-                }
-
-                pendingSafAction?.invoke()
-            } catch (e: Exception) {
-                Toast.makeText(this, "Errore permesso: ${e.message}", Toast.LENGTH_LONG).show()
-            }
-        }
-        pendingSafAction = null
+        pendingSafAction = onGranted
+        requestSafForPath(path)
     }
-
-    // ===== USB: getSafDocumentFile multi-volume =====
-    private fun getSafDocumentFile(path: String): DocumentFile? {
-        // Costruisci la lista dei volumi: prima la memoria interna, poi tutti i volumi USB noti
-        val volumes = (listOf(rootInternal) + safTreeMap.keys).sortedByDescending { it.length }
-
-        for (volume in volumes) {
-            if (!path.startsWith(volume) && path != volume) continue
-            val tree = if (volume == rootInternal) safTreeUri else safTreeMap[volume]
-            if (tree == null) continue
-
-            val rel = path.removePrefix(volume).trimStart('/')
-
-            // Tentativo 1: buildDocumentUriUsingTree (veloce e diretto)
-            try {
-                val treeDocId = DocumentsContract.getTreeDocumentId(tree)
-                val docId = if (rel.isEmpty()) treeDocId else "$treeDocId/$rel"
-                val docUri = DocumentsContract.buildDocumentUriUsingTree(tree, docId)
-                val doc = DocumentFile.fromSingleUri(this, docUri)
-                if (doc != null && doc.exists()) return doc
-            } catch (_: Exception) {}
-
-            // Tentativo 2: navigazione da root tree (fallback)
-            try {
-                var d = DocumentFile.fromTreeUri(this, tree) ?: continue
-                if (rel.isEmpty()) return d
-                var ok = true
-                for (part in rel.split("/").filter { it.isNotEmpty() }) {
-                    val next = d?.findFile(part)
-                    if (next == null) { ok = false; break }
-                    d = next
-                }
-                if (ok) return d
-            } catch (_: Exception) {}
-        }
-        return null
-    }
-
     private fun loadDirectory(path: String, resetCategory: Boolean = false) {
         currentPath = path
         txtPath.text = path
@@ -1421,9 +1312,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- COPIA/INCOLLA ----------
-    // IDENTICO alla 3ª versione, con l'UNICA differenza: check iniziale
-    // per USB senza permesso SAF.
+    // ---------- COPIA/INCOLLA (UI OTTIMISTICA + COPIA IN BACKGROUND) ----------
 
     private fun pasteFromClipboard() {
         if (clipboardPaths.isEmpty()) {
@@ -1435,32 +1324,6 @@ class MainActivity : AppCompatActivity() {
         val action = clipboardAction
         val dstDir = File(currentPath)
         val dstPath = dstDir.absolutePath
-
-        // ===== USB: check SOLO se la destinazione è un volume esterno =====
-        // La memoria interna non entra MAI in questo blocco.
-        val isInternal = dstPath == rootInternal || dstPath.startsWith("$rootInternal/")
-
-        if (!isInternal) {
-            // Siamo su un volume esterno (USB). Verifica se il volume è nella mappa.
-            val volumePath = extractVolumePath(dstPath)
-            if (volumePath != null && !safTreeMap.containsKey(volumePath)) {
-                // Manca il permesso SAF per questo volume USB.
-                // Chiedilo e riprendi automaticamente dopo.
-                pendingUsbPasteAfterSaf = true
-                AlertDialog.Builder(this)
-                    .setTitle("Permesso USB richiesto")
-                    .setMessage("Per copiare file su questo volume esterno devi concedere l'accesso.\n\nNella prossima schermata tocca \"Usa questa cartella\" sulla radice della USB.")
-                    .setPositiveButton("Concedi") { _, _ ->
-                        requestSafForUsbPaste(volumePath)
-                    }
-                    .setNegativeButton("Annulla") { _, _ ->
-                        pendingUsbPasteAfterSaf = false
-                    }
-                    .show()
-                return
-            }
-        }
-        // ===== FINE check USB =====
 
         val existingSrc = srcPaths.filter { File(it).exists() }
         if (existingSrc.isEmpty()) {
@@ -1478,7 +1341,7 @@ class MainActivity : AppCompatActivity() {
 
         // 1) UI OTTIMISTICA: crea placeholder e mostrali SUBITO
         val placeholders = mutableListOf<FileItem>()
-        val pendingCopy = mutableListOf<Pair<String, File>>()
+        val pendingCopy = mutableListOf<Pair<String, File>>() // srcPath -> dst
 
         for (srcPath in existingSrc) {
             val src = File(srcPath)
@@ -1502,11 +1365,13 @@ class MainActivity : AppCompatActivity() {
             pendingCopy.add(srcPath to dst)
         }
 
+        // Aggiungi i placeholder alla lista visibile SUBITO
         val currentList = allItems.toMutableList()
         currentList.addAll(placeholders)
         allItems = currentList
         applyFilters()
 
+        // 2) Toast breve
         Toast.makeText(
             this,
             if (action == "cut") "Spostamento in corso..." else "Copia in corso...",
@@ -1519,7 +1384,7 @@ class MainActivity : AppCompatActivity() {
         exitSelectionMode()
         updatePasteButton()
 
-        // 2) COPIA IN BACKGROUND
+        // 3) COPIA IN BACKGROUND
         heavyExecutor.execute {
             var copied = 0
             var errorMsg = ""
@@ -1555,7 +1420,6 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
-                    // FALLBACK SAF (gestisce anche USB)
                     if (!ok && src.isDirectory) {
                         try {
                             ok = copyDirectoryViaSaf(src, dst)
@@ -1607,6 +1471,8 @@ class MainActivity : AppCompatActivity() {
                         .show()
                 }
 
+                // 4) RICARICA la lista SOLO se siamo ancora nella cartella di destinazione
+                //    (il reload rimuove i placeholder e mostra i file reali)
                 if (currentPath == dstPath) {
                     loadDirectory(currentPath)
                 }
@@ -2010,7 +1876,7 @@ class MainActivity : AppCompatActivity() {
                         loadDirectory(currentPath); return@setPositiveButton
                     }
                 } catch (_: Exception) {}
-                requestSaf {
+                requestSafForPath(item.path) {
                     val doc = getSafDocumentFile(item.path)
                     if (doc != null && doc.renameTo(newName)) {
                         Toast.makeText(this, "Rinominato (SAF)", Toast.LENGTH_SHORT).show()
@@ -2082,7 +1948,7 @@ class MainActivity : AppCompatActivity() {
                         loadDirectory(currentPath); return@setPositiveButton
                     }
                 } catch (_: Exception) {}
-                requestSaf {
+                requestSafForPath(currentPath) {
                     val parent = getSafDocumentFile(currentPath)
                     if (parent != null && parent.createDirectory(name) != null) {
                         Toast.makeText(this, "Cartella creata (SAF)", Toast.LENGTH_SHORT).show()
@@ -2124,7 +1990,6 @@ class MainActivity : AppCompatActivity() {
         options.add("Aggiorna cartella")
         options.add(if (showHidden) "Nascondi file nascosti" else "Mostra file nascosti")
         options.add("Rinnova permesso scrittura")
-        options.add("Rimuovi permessi USB salvati")
 
         AlertDialog.Builder(this)
             .setTitle("Impostazioni")
@@ -2137,21 +2002,12 @@ class MainActivity : AppCompatActivity() {
                         loadDirectory(currentPath)
                     }
                     2 -> {
-                        safTreeUri = null
-                        prefs.edit().remove("saf_tree_uri").apply()
-                        requestSaf { Toast.makeText(this, "Permesso rinnovato", Toast.LENGTH_SHORT).show() }
-                    }
-                    3 -> {
-                        safTreeMap.clear()
-                        val ed = prefs.edit()
-                        for (key in prefs.all.keys) {
-                            if (key.startsWith("saf_tree_/storage/") || key.startsWith("saf_tree_/mnt/")) {
-                                ed.remove(key)
-                            }
-                        }
-                        ed.apply()
-                        Toast.makeText(this, "Permessi USB rimossi", Toast.LENGTH_SHORT).show()
-                        updateStorageCards()
+                        val key = volumeKey(currentPath)
+                        safTreeUris.remove(key)
+                        if (key == "primary") safTreeUri = null
+                        prefs.edit().remove("saf_tree_uri_$key").apply()
+                        if (key == "primary") prefs.edit().remove("saf_tree_uri").apply()
+                        requestSafForPath(currentPath) { Toast.makeText(this, "Permesso rinnovato", Toast.LENGTH_SHORT).show() }
                     }
                 }
             }.show()
