@@ -1,13 +1,11 @@
 package com.filemanager
 
-import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.widget.ImageButton
-import android.widget.ImageView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
@@ -22,14 +20,12 @@ class VideoPlayerActivity : AppCompatActivity() {
     }
 
     private lateinit var videoView: VideoView
-    private lateinit var imgBackground: ImageView
     private lateinit var controls: View
     private lateinit var btnPlayPause: ImageButton
     private lateinit var seekBar: SeekBar
     private lateinit var txtTime: TextView
 
     private val handler = Handler(Looper.getMainLooper())
-    private var isAudio = false
     private var isPrepared = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -48,22 +44,11 @@ class VideoPlayerActivity : AppCompatActivity() {
             return
         }
 
-        isAudio = isAudioFile(file.name)
-
         videoView = findViewById(R.id.videoView)
-        imgBackground = findViewById(R.id.imgBackground)
         controls = findViewById(R.id.controls)
         btnPlayPause = findViewById(R.id.btnPlayPause)
         seekBar = findViewById(R.id.seekBar)
         txtTime = findViewById(R.id.txtTime)
-
-        // Audio → mostra sfondo; Video → nascondi sfondo
-        if (isAudio) {
-            imgBackground.visibility = View.VISIBLE
-            videoView.setBackgroundColor(Color.TRANSPARENT)
-        } else {
-            imgBackground.visibility = View.GONE
-        }
 
         videoView.setVideoURI(Uri.fromFile(file))
 
@@ -73,7 +58,7 @@ class VideoPlayerActivity : AppCompatActivity() {
             seekBar.max = videoView.duration
             updateTimeLabel()
             videoView.start()
-            updatePlayPauseIcon()
+            btnPlayPause.setImageResource(android.R.drawable.ic_media_pause)
             startProgressUpdater()
         }
 
@@ -82,7 +67,7 @@ class VideoPlayerActivity : AppCompatActivity() {
             seekBar.progress = seekBar.max
         }
 
-        videoView.setOnErrorListener { _, what, extra ->
+        videoView.setOnErrorListener { _, what, _ ->
             Toast.makeText(this, "Errore riproduzione ($what)", Toast.LENGTH_LONG).show()
             true
         }
@@ -111,7 +96,6 @@ class VideoPlayerActivity : AppCompatActivity() {
 
         // Tap sullo schermo → mostra/nascondi controlli
         videoView.setOnClickListener { toggleControls() }
-        imgBackground.setOnClickListener { toggleControls() }
     }
 
     private fun toggleControls() {
@@ -138,21 +122,11 @@ class VideoPlayerActivity : AppCompatActivity() {
         }
     }
 
-    private fun updatePlayPauseIcon() {
-        btnPlayPause.setImageResource(android.R.drawable.ic_media_pause)
-    }
-
     private fun formatTime(ms: Int): String {
         val totalSec = ms / 1000
         val min = totalSec / 60
         val sec = totalSec % 60
         return String.format("%02d:%02d", min, sec)
-    }
-
-    private fun isAudioFile(name: String): Boolean {
-        val l = name.lowercase()
-        return l.endsWith(".mp3") || l.endsWith(".wav") || l.endsWith(".ogg") ||
-               l.endsWith(".flac") || l.endsWith(".m4a") || l.endsWith(".aac")
     }
 
     override fun onPause() {
