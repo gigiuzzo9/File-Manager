@@ -27,6 +27,7 @@ class ImageViewerActivity : AppCompatActivity() {
     private lateinit var txtName: TextView
     private lateinit var btnClose: ImageButton
 
+    @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_image_viewer)
@@ -48,7 +49,7 @@ class ImageViewerActivity : AppCompatActivity() {
 
         btnClose.setOnClickListener { finish() }
 
-        val adapter = ImagePagerAdapter(paths) { toggleUi() }
+        val adapter = ImagePagerAdapter(paths)
         viewPager.adapter = adapter
         viewPager.setCurrentItem(startIndex, false)
 
@@ -59,11 +60,26 @@ class ImageViewerActivity : AppCompatActivity() {
                 txtName.text = File(paths[position]).name
             }
         })
+
+        // Intercetta il tap singolo tramite il ViewPager2,
+        // senza toccare il PhotoView (così zoom e swipe restano intatti)
+        val gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                toggleUi()
+                return true
+            }
+
+            override fun onDown(e: MotionEvent): Boolean = true
+        })
+
+        viewPager.getChildAt(0)?.setOnTouchListener { _, event ->
+            // Passa SEMPRE l'evento al ViewPager2 (per swipe) e al PhotoView (per zoom)
+            // Intercetta solo il tap singolo
+            gestureDetector.onTouchEvent(event)
+            false
+        }
     }
 
-    /**
-     * Mostra o nasconde nome file e pulsante X
-     */
     private fun toggleUi() {
         uiVisible = !uiVisible
         val alpha = if (uiVisible) 1f else 0f
@@ -73,36 +89,16 @@ class ImageViewerActivity : AppCompatActivity() {
         btnClose.isClickable = uiVisible
     }
 
-    private class ImagePagerAdapter(
-        val paths: List<String>,
-        val onTap: () -> Unit
-    ) : RecyclerView.Adapter<ImagePagerAdapter.VH>() {
+    private class ImagePagerAdapter(val paths: List<String>) : RecyclerView.Adapter<ImagePagerAdapter.VH>() {
 
         class VH(view: View) : RecyclerView.ViewHolder(view) {
             val photoView: PhotoView = view.findViewById(R.id.photoView)
         }
 
-        @SuppressLint("ClickableViewAccessibility")
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
             val view = LayoutInflater.from(parent.context)
                 .inflate(R.layout.item_image_page, parent, false)
-            val vh = VH(view)
-
-            // Gesture detector per il tap singolo (PhotoView intercetta il doppio tap)
-            val gestureDetector = GestureDetector(parent.context, object : GestureDetector.SimpleOnGestureListener() {
-                override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                    onTap()
-                    return true
-                }
-                override fun onDown(e: MotionEvent): Boolean = true
-            })
-
-            vh.photoView.setOnTouchListener { _, event ->
-                gestureDetector.onTouchEvent(event)
-                false // lascia passare l'evento al PhotoView per zoom/pan
-            }
-
-            return vh
+            return VH(view)
         }
 
         override fun onBindViewHolder(holder: VH, position: Int) {
