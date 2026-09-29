@@ -1239,23 +1239,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun scanRecursive(dir: File, out: MutableList<FileItem>, cat: String, depth: Int) {
-        if (depth > 8) return
-        val dirName = dir.name
-        if (dirName == "Android" || dirName == ".trash" || dirName == ".thumbnails") return
+    if (depth > 8) return
+    val dirName = dir.name
+    if (dirName == "Android" || dirName == ".trash" || dirName == ".thumbnails") return
 
-        val files = dir.listFiles() ?: return
-        for (f in files) {
-            val name = f.name
-            if (!showHidden && name.startsWith(".")) continue
-            if (f.isDirectory) scanRecursive(f, out, cat, depth + 1)
-            else {
-                val match = if (cat == "documents") isDocumentFile(name) else categoryFor(name) == cat
-                if (match) {
-                    out.add(FileItem(f, name, f.absolutePath, false, f.length(), f.lastModified(), 0))
-                }
+    val files = dir.listFiles() ?: return
+    for (f in files) {
+        val name = f.name
+        if (!showHidden && name.startsWith(".")) continue
+        if (f.isDirectory) scanRecursive(f, out, cat, depth + 1)
+        else {
+            val match = if (cat == "documents") isDocumentFile(name) else categoryFor(name) == cat
+            if (match) {
+                val parentRelPath = try {
+                    dir.absolutePath.removePrefix(rootInternal).trimStart('/')
+                } catch (_: Exception) { "" }
+                val searchParentPath = if (parentRelPath.isEmpty()) "Memoria interna" else parentRelPath
+                out.add(FileItem(f, name, f.absolutePath, false, f.length(), f.lastModified(), 0, searchParentPath))
             }
         }
     }
+}
 
     private fun renderList() {
         val firstVisible = try {
