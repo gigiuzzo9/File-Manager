@@ -41,8 +41,15 @@
             </intent-filter>
         </activity>
 
+        <!-- Visualizzatore immagini -->
+        <activity
+            android:name=".ImageViewerActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode|smallestScreenSize|density"
+            android:theme="@style/AppTheme" />
+
         <provider
-            android:name="androidx.core.content.FileProvider"
+            android:name="androidx.content.FileProvider"
             android:authorities="${applicationId}.provider"
             android:exported="false"
             android:grantUriPermissions="true">
@@ -56,12 +63,6 @@
             android:name=".AppChooserReceiver"
             android:exported="false" />
 
-        <!--
-            NON registriamo qui il receiver USB/mount perché lo gestiamo
-            dinamicamente in onResume/onPause del MainActivity.
-            Registrarlo staticamente causerebbe problemi su Android 14+
-            e non è necessario per la tua logica.
-        -->
     </application>
 
 </manifest>
