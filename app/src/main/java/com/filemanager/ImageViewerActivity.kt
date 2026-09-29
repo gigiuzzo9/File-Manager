@@ -1,6 +1,5 @@
 package com.filemanager
 
-import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -8,7 +7,9 @@ import android.view.ViewGroup
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
+import com.bumptech.glide.Glide
 import com.github.chrisbanes.photoview.PhotoView
+import java.io.File
 
 class ImageViewerActivity : AppCompatActivity() {
 
@@ -52,14 +53,13 @@ class ImageViewerActivity : AppCompatActivity() {
 
         override fun onBindViewHolder(holder: VH, position: Int) {
             val path = paths[position]
-            try {
-                val bitmap = BitmapFactory.decodeFile(path)
-                if (bitmap != null) {
-                    holder.photoView.setImageBitmap(bitmap)
-                } else {
-                    holder.photoView.setImageResource(android.R.drawable.ic_menu_report_image)
-                }
-            } catch (_: Exception) {
+            val file = File(path)
+
+            if (file.exists()) {
+                Glide.with(holder.photoView.context)
+                    .load(file)
+                    .into(holder.photoView)
+            } else {
                 holder.photoView.setImageResource(android.R.drawable.ic_menu_report_image)
             }
         }
