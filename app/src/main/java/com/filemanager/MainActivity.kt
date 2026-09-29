@@ -683,7 +683,6 @@ class MainActivity : AppCompatActivity() {
             popup.menu.add(0, 20, 0, "Seleziona tutto")
         }
 
-        // MODIFICA 1: rimossa la voce "Apri", resta solo "Apri con..."
         if (count == 1) {
             val item = getSingleSelectedItem()
             if (item != null && !item.isDirectory) {
@@ -719,7 +718,6 @@ class MainActivity : AppCompatActivity() {
                     renderList()
                 }
                 10 -> {
-                    // MODIFICA 3: ora apre il picker esterno
                     val item = getSingleSelectedItem()
                     if (item != null) { exitSelectionMode(); openFileWithPicker(item) }
                 }
@@ -1306,15 +1304,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // MODIFICA 2: openFileWithDefault ora apre il viewer per le immagini
+    // APERTURA FILE — viewer immagini + player video/audio
     // ============================================================
 
     private fun openFileWithDefault(item: FileItem) {
         if (item.name.lowercase().endsWith(".apk")) { installApk(item); return }
 
-        // Se è un'immagine, apri il visualizzatore interno con swipe
+        // Immagini → viewer interno
         if (isImageFile(item.name)) {
             openImageViewer(item)
+            return
+        }
+
+        // Video e audio → player interno
+        if (isMediaFile(item.name)) {
+            openMediaPlayer(item)
             return
         }
 
@@ -1331,8 +1335,15 @@ class MainActivity : AppCompatActivity() {
                l.endsWith(".gif") || l.endsWith(".webp") || l.endsWith(".bmp")
     }
 
+    private fun isMediaFile(name: String): Boolean {
+        val l = name.lowercase()
+        return l.endsWith(".mp4") || l.endsWith(".mkv") || l.endsWith(".avi") ||
+               l.endsWith(".mov") || l.endsWith(".webm") || l.endsWith(".3gp") ||
+               l.endsWith(".mp3") || l.endsWith(".wav") || l.endsWith(".ogg") ||
+               l.endsWith(".flac") || l.endsWith(".m4a") || l.endsWith(".aac")
+    }
+
     private fun openImageViewer(item: FileItem) {
-        // Prendi tutte le immagini visibili nella cartella corrente
         val imagePaths = displayedItems
             .filter { !it.isDirectory && isImageFile(it.name) }
             .map { it.path }
@@ -1344,6 +1355,12 @@ class MainActivity : AppCompatActivity() {
         val intent = Intent(this, ImageViewerActivity::class.java)
         intent.putStringArrayListExtra(ImageViewerActivity.EXTRA_PATHS, ArrayList(imagePaths))
         intent.putExtra(ImageViewerActivity.EXTRA_INDEX, startIndex)
+        startActivity(intent)
+    }
+
+    private fun openMediaPlayer(item: FileItem) {
+        val intent = Intent(this, VideoPlayerActivity::class.java)
+        intent.putExtra(VideoPlayerActivity.EXTRA_PATH, item.path)
         startActivity(intent)
     }
 
