@@ -58,15 +58,9 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
-        <!--
-            Rimosso il receiver AppChooserReceiver perché la classe
-            non esiste più nel progetto e causava crash all'avvio.
-            Se un domani la reimplementi, rimetti qui il blocco:
-
-            <receiver
-                android:name=".AppChooserReceiver"
-                android:exported="false" />
-        -->
+        <receiver
+            android:name=".AppChooserReceiver"
+            android:exported="false" />
 
     </application>
 
