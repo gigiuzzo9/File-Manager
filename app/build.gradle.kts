@@ -43,4 +43,8 @@ dependencies {
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("com.github.bumptech.glide:glide:4.16.0")
+
+    // Aggiunte per il visualizzatore immagini
+    implementation("androidx.viewpager2:viewpager2:1.1.0")
+    implementation("com.github.chrisbanes:PhotoView:2.3.0")
 }
