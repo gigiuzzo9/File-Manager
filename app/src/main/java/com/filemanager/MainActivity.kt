@@ -104,7 +104,6 @@ class MainActivity : AppCompatActivity() {
     private var selectionMode: Boolean = false
     private val selectedPaths = mutableSetOf<String>()
 
-    // Mappa path radice volume -> treeUri SAF persistente
     private val safTreeUris = mutableMapOf<String, Uri>()
 
     private var pendingSafPath: String? = null
@@ -220,7 +219,6 @@ class MainActivity : AppCompatActivity() {
         if (hasStoragePermission()) {
             loadDirectory(currentPath)
 
-            // SAF automatico sulla memoria interna al primo avvio
             if (!hasSafFor(rootInternal) && !prefs.getBoolean(PREFS_SAF_INTERNAL_REQUESTED, false)) {
                 prefs.edit().putBoolean(PREFS_SAF_INTERNAL_REQUESTED, true).apply()
                 requestSafForPath(rootInternal) {
@@ -359,7 +357,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildOpenDocumentTreeIntent(volumeRoot: String): Intent {
-        // API 29+: usa StorageVolume.createOpenDocumentTreeIntent() → picker già sulla root
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             try {
                 val sm = getSystemService(STORAGE_SERVICE) as StorageManager
@@ -374,7 +371,6 @@ class MainActivity : AppCompatActivity() {
             } catch (_: Exception) {}
         }
 
-        // Fallback: EXTRA_INITIAL_URI con URI esternalstorage
         val fallback = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
@@ -407,7 +403,6 @@ class MainActivity : AppCompatActivity() {
 
             val volumeRoot = pendingSafPath ?: rootInternal
 
-            // Verifica che l'utente abbia selezionato ESATTAMENTE la root del volume
             val selectedDocId = try {
                 DocumentsContract.getTreeDocumentId(uri)
             } catch (_: Exception) { null }
@@ -421,7 +416,6 @@ class MainActivity : AppCompatActivity() {
             }
 
             if (selectedDocId != null && !selectedDocId.equals(expectedDocId, ignoreCase = true)) {
-                // Sottocartella selezionata: avvisa e fai riprovare
                 AlertDialog.Builder(this)
                     .setTitle("Seleziona la root")
                     .setMessage(
@@ -689,10 +683,10 @@ class MainActivity : AppCompatActivity() {
             popup.menu.add(0, 20, 0, "Seleziona tutto")
         }
 
+        // MODIFICA: rimossa voce "Apri", resta solo "Apri con..."
         if (count == 1) {
             val item = getSingleSelectedItem()
             if (item != null && !item.isDirectory) {
-                popup.menu.add(0, 10, 1, "Apri")
                 popup.menu.add(0, 11, 2, "Apri con...")
             }
         }
@@ -725,8 +719,9 @@ class MainActivity : AppCompatActivity() {
                     renderList()
                 }
                 10 -> {
+                    // MODIFICA: ora apre il picker esterno
                     val item = getSingleSelectedItem()
-                    if (item != null) { exitSelectionMode(); openFileWithDefault(item) }
+                    if (item != null) { exitSelectionMode(); openFileWithPicker(item) }
                 }
                 11 -> {
                     val item = getSingleSelectedItem()
@@ -1310,14 +1305,49 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ============================================================
+    // APERTURA FILE — MODIFICATA PER VISUALIZZATORE IMMAGINI
+    // ============================================================
+
     private fun openFileWithDefault(item: FileItem) {
         if (item.name.lowercase().endsWith(".apk")) { installApk(item); return }
+
+        // Se è un'immagine, apri il visualizzatore interno con swipe
+        if (isImageFile(item.name)) {
+            openImageViewer(item)
+            return
+        }
+
         val mimeType = getMimeType(item.name)
         val categoryKey = getCategoryKey(mimeType, item.name)
         val savedPackage = prefs.getString("app_for_$categoryKey", null)
         if (savedPackage != null && tryOpenWithPackage(item, savedPackage, mimeType)) return
         showCustomAppPicker(item, mimeType, categoryKey)
     }
+
+    private fun isImageFile(name: String): Boolean {
+        val l = name.lowercase()
+        return l.endsWith(".jpg") || l.endsWith(".jpeg") || l.endsWith(".png") ||
+               l.endsWith(".gif") || l.endsWith(".webp") || l.endsWith(".bmp")
+    }
+
+    private fun openImageViewer(item: FileItem) {
+        // Prendi tutte le immagini visibili nella cartella corrente
+        val imagePaths = displayedItems
+            .filter { !it.isDirectory && isImageFile(it.name) }
+            .map { it.path }
+
+        if (imagePaths.isEmpty()) return
+
+        val startIndex = imagePaths.indexOf(item.path).coerceAtLeast(0)
+
+        val intent = Intent(this, ImageViewerActivity::class.java)
+        intent.putStringArrayListExtra(ImageViewerActivity.EXTRA_PATHS, ArrayList(imagePaths))
+        intent.putExtra(ImageViewerActivity.EXTRA_INDEX, startIndex)
+        startActivity(intent)
+    }
+
+    // ============================================================
 
     private fun installApk(item: FileItem) {
         try {
