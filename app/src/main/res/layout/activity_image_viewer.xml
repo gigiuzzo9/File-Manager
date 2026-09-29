@@ -9,25 +9,4 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <TextView
-        android:id="@+id/txtName"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="top|start"
-        android:layout_margin="16dp"
-        android:padding="8dp"
-        android:background="#80000000"
-        android:textColor="#FFFFFF"
-        android:textSize="14sp" />
-
-    <ImageButton
-        android:id="@+id/btnClose"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:layout_gravity="top|end"
-        android:layout_margin="16dp"
-        android:src="@android:drawable/ic_menu_close_clear_cancel"
-        android:background="#80000000"
-        android:contentDescription="Chiudi" />
-
 </FrameLayout>
