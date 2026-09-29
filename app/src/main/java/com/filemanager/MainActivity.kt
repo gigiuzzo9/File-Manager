@@ -683,7 +683,7 @@ class MainActivity : AppCompatActivity() {
             popup.menu.add(0, 20, 0, "Seleziona tutto")
         }
 
-        // MODIFICA: rimossa voce "Apri", resta solo "Apri con..."
+        // MODIFICA 1: rimossa la voce "Apri", resta solo "Apri con..."
         if (count == 1) {
             val item = getSingleSelectedItem()
             if (item != null && !item.isDirectory) {
@@ -719,7 +719,7 @@ class MainActivity : AppCompatActivity() {
                     renderList()
                 }
                 10 -> {
-                    // MODIFICA: ora apre il picker esterno
+                    // MODIFICA 3: ora apre il picker esterno
                     val item = getSingleSelectedItem()
                     if (item != null) { exitSelectionMode(); openFileWithPicker(item) }
                 }
@@ -1306,7 +1306,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // APERTURA FILE — MODIFICATA PER VISUALIZZATORE IMMAGINI
+    // MODIFICA 2: openFileWithDefault ora apre il viewer per le immagini
     // ============================================================
 
     private fun openFileWithDefault(item: FileItem) {
