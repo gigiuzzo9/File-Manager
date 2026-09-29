@@ -4,16 +4,6 @@
     android:layout_height="match_parent"
     android:background="#000000">
 
-    <!-- Immagine di sfondo (visibile solo per audio) -->
-    <ImageView
-        android:id="@+id/imgBackground"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:scaleType="centerInside"
-        android:src="@drawable/audio"
-        android:contentDescription="Sfondo" />
-
-    <!-- VideoView sopra -->
     <VideoView
         android:id="@+id/videoView"
         android:layout_width="match_parent"
