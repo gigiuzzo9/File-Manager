@@ -211,26 +211,46 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onResume() {
-        super.onResume()
+    super.onResume()
 
-        mainHandler.removeCallbacks(storagePollRunnable)
-        mainHandler.post(storagePollRunnable)
+    mainHandler.removeCallbacks(storagePollRunnable)
+    mainHandler.post(storagePollRunnable)
 
-        if (hasStoragePermission()) {
+    if (hasStoragePermission()) {
+        val cat = activeCategory
+        if (cat != null) {
+            refreshCategory(cat)
+        } else {
             loadDirectory(currentPath)
+        }
 
-            if (!hasSafFor(rootInternal) && !prefs.getBoolean(PREFS_SAF_INTERNAL_REQUESTED, false)) {
-                prefs.edit().putBoolean(PREFS_SAF_INTERNAL_REQUESTED, true).apply()
-                requestSafForPath(rootInternal) {
-                    Toast.makeText(this, "Permesso completo concesso", Toast.LENGTH_SHORT).show()
-                    updateStorageCards()
-                    loadDirectory(currentPath)
-                }
+        if (!hasSafFor(rootInternal) && !prefs.getBoolean(PREFS_SAF_INTERNAL_REQUESTED, false)) {
+            prefs.edit().putBoolean(PREFS_SAF_INTERNAL_REQUESTED, true).apply()
+            requestSafForPath(rootInternal) {
+                Toast.makeText(this, "Permesso completo concesso", Toast.LENGTH_SHORT).show()
+                updateStorageCards()
+                val c = activeCategory
+                if (c != null) refreshCategory(c) else loadDirectory(currentPath)
             }
         }
-        updateStorageCards()
-        updatePasteButton()
     }
+    updateStorageCards()
+    updatePasteButton()
+}
+
+private fun refreshCategory(cat: String) {
+    txtPath.text = "Filtro: $cat"
+    executor.execute {
+        val found = mutableListOf<FileItem>()
+        try { scanRecursive(File(rootInternal), found, cat, 0) } catch (_: Exception) {}
+        val sorted = when (sortBy) {
+            "size" -> found.sortedByDescending { it.size }
+            "date" -> found.sortedByDescending { it.lastModified }
+            else -> found.sortedBy { it.name.lowercase() }
+        }
+        mainHandler.post { displayedItems = sorted; renderList() }
+    }
+}
 
     override fun onPause() {
         super.onPause()
@@ -753,18 +773,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun shareSelectedFiles() {
-        if (selectedPaths.isEmpty()) return
-        if (selectedPaths.size == 1) {
-            val path = selectedPaths.first()
-            val item = allItems.find { it.path == path }
-            if (item != null && !item.isDirectory) {
-                shareFile(item)
-                exitSelectionMode()
-            } else if (item != null && item.isDirectory) {
-                Toast.makeText(this, "Impossibile condividere una cartella", Toast.LENGTH_SHORT).show()
-            }
-            return
+    if (selectedPaths.isEmpty()) return
+    if (selectedPaths.size == 1) {
+        val path = selectedPaths.first()
+        val item = displayedItems.find { it.path == path }
+            ?: allItems.find { it.path == path }
+        if (item != null && !item.isDirectory) {
+            shareFile(item)
+            exitSelectionMode()
+        } else if (item != null && item.isDirectory) {
+            Toast.makeText(this, "Impossibile condividere una cartella", Toast.LENGTH_SHORT).show()
         }
+        return
+    }
 
         try {
             val uris = ArrayList<Uri>()
