@@ -1216,6 +1216,28 @@ private fun refreshCategory(cat: String) {
     renderList()
 }
 
+private fun naturalKey(name: String): String {
+    val sb = StringBuilder()
+    var i = 0
+    val lower = name.lowercase()
+    while (i < lower.length) {
+        val c = lower[i]
+        if (c.isDigit()) {
+            var j = i
+            while (j < lower.length && lower[j].isDigit()) j++
+            val numStr = lower.substring(i, j)
+            val num = numStr.toLongOrNull() ?: 0L
+            sb.append(String.format("%020d", num))
+            i = j
+        } else {
+            sb.append(c)
+            i++
+        }
+    }
+    return sb.toString()
+}
+    
+
     private fun searchRecursive(dir: File, query: String, out: MutableList<FileItem>, depth: Int) {
         if (depth > 8) return
         val dirName = dir.name
