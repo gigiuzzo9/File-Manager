@@ -984,53 +984,75 @@ private fun refreshCategory(cat: String) {
     }
 
     private fun createStorageCard(vol: StorageVolumeInfo): LinearLayout {
-        val density = resources.displayMetrics.density
-        val card = LinearLayout(this)
-        card.orientation = LinearLayout.VERTICAL
-        card.setPadding((12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt())
-        card.isClickable = true
-        card.isFocusable = true
+    val density = resources.displayMetrics.density
+    val card = LinearLayout(this)
+    card.orientation = LinearLayout.VERTICAL
+    card.setPadding((12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt())
+    card.isClickable = true
+    card.isFocusable = true
 
-        val bg = GradientDrawable()
-        bg.setColor(Color.parseColor("#2A2A2A"))
-        bg.cornerRadius = 12 * density
-        card.background = bg
+    // Rileva se il tema è scuro o chiaro
+    val isNightMode = (resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
 
-        val title = TextView(this)
-        title.text = vol.label
-        title.setTextColor(Color.WHITE)
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-        title.setTypeface(null, android.graphics.Typeface.BOLD)
-        card.addView(title)
-
-        val info = TextView(this)
-        if (vol.totalBytes > 0) {
-            val usedGb = vol.usedBytes / (1024.0 * 1024.0 * 1024.0)
-            val totalGb = vol.totalBytes / (1024.0 * 1024.0 * 1024.0)
-            info.text = String.format("%.1f GB / %.1f GB", usedGb, totalGb)
-        } else {
-            info.text = "Info non disponibili"
-        }
-        info.setTextColor(Color.parseColor("#CCCCCC"))
-        info.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-        info.setPadding(0, (2 * density).toInt(), 0, 0)
-        card.addView(info)
-
-        card.setOnClickListener {
-            activeCategory = null
-            searchQuery = ""
-            editSearch.setText("")
-            if (vol.path.isEmpty()) {
-                requestSafForPath(rootInternal)
-            } else if (vol.path == rootInternal) {
-                openDirectoryWithSafCheck(rootInternal)
-            } else {
-                tryAccessExternalVolume(vol.path)
-            }
-        }
-
-        return card
+    // Colori in base al tema
+    val bgColor = if (isNightMode) {
+        Color.parseColor("#2A2A2A")   // grigio scuro (tema scuro)
+    } else {
+        Color.parseColor("#E0E0E0")   // grigio chiaro (tema chiaro)
     }
+    val titleColor = if (isNightMode) {
+        Color.WHITE
+    } else {
+        Color.parseColor("#212121")   // quasi nero (tema chiaro)
+    }
+    val subtitleColor = if (isNightMode) {
+        Color.parseColor("#CCCCCC")
+    } else {
+        Color.parseColor("#666666")   // grigio medio (tema chiaro)
+    }
+
+    val bg = GradientDrawable()
+    bg.setColor(bgColor)
+    bg.cornerRadius = 12 * density
+    card.background = bg
+
+    val title = TextView(this)
+    title.text = vol.label
+    title.setTextColor(titleColor)
+    title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+    title.setTypeface(null, android.graphics.Typeface.BOLD)
+    card.addView(title)
+
+    val info = TextView(this)
+    if (vol.totalBytes > 0) {
+        val usedGb = vol.usedBytes / (1024.0 * 1024.0 * 1024.0)
+        val totalGb = vol.totalBytes / (1024.0 * 1024.0 * 1024.0)
+        info.text = String.format("%.1f GB / %.1f GB", usedGb, totalGb)
+    } else {
+        info.text = "Info non disponibili"
+    }
+    info.setTextColor(subtitleColor)
+    info.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+    info.setPadding(0, (2 * density).toInt(), 0, 0)
+    card.addView(info)
+
+    card.setOnClickListener {
+        activeCategory = null
+        searchQuery = ""
+        editSearch.setText("")
+        if (vol.path.isEmpty()) {
+            requestSafForPath(rootInternal)
+        } else if (vol.path == rootInternal) {
+            openDirectoryWithSafCheck(rootInternal)
+        } else {
+            tryAccessExternalVolume(vol.path)
+        }
+    }
+
+    return card
+}
 
     private fun tryAccessExternalVolume(path: String) {
         try {
