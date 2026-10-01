@@ -246,12 +246,11 @@ private fun refreshCategory(cat: String) {
         val sorted = when (sortBy) {
             "size" -> found.sortedByDescending { it.size }
             "date" -> found.sortedByDescending { it.lastModified }
-            else -> found.sortedBy { it.name.lowercase() }
+            else -> found.sortedBy { naturalKey(it.name) }
         }
         mainHandler.post { displayedItems = sorted; renderList() }
     }
 }
-
     override fun onPause() {
         super.onPause()
         mainHandler.removeCallbacks(storagePollRunnable)
@@ -1186,36 +1185,36 @@ private fun refreshCategory(cat: String) {
     }
 
     private fun applyFilters() {
-        var list = allItems.toList()
+    var list = allItems.toList()
 
-        if (searchQuery.isNotEmpty()) {
-            if (currentPath == rootInternal) {
-                val results = mutableListOf<FileItem>()
-                val q = searchQuery.lowercase()
-                try {
-                    searchRecursive(File(rootInternal), q, results, 0)
-                } catch (_: Exception) {}
-                list = results
-            } else {
-                list = list.filter { it.name.lowercase().contains(searchQuery) }
-            }
+    if (searchQuery.isNotEmpty()) {
+        if (currentPath == rootInternal) {
+            val results = mutableListOf<FileItem>()
+            val q = searchQuery.lowercase()
+            try {
+                searchRecursive(File(rootInternal), q, results, 0)
+            } catch (_: Exception) {}
+            list = results
+        } else {
+            list = list.filter { it.name.lowercase().contains(searchQuery) }
         }
-
-        if (activeCategory != null) {
-            list = list.filter { item ->
-                !item.isDirectory && categoryFor(item.name) == activeCategory
-            }
-        }
-
-        list = when (sortBy) {
-            "size" -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenByDescending { it.size })
-            "date" -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenByDescending { it.lastModified })
-            else -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenBy { it.name.lowercase() })
-        }
-
-        displayedItems = list
-        renderList()
     }
+
+    if (activeCategory != null) {
+        list = list.filter { item ->
+            !item.isDirectory && categoryFor(item.name) == activeCategory
+        }
+    }
+
+    list = when (sortBy) {
+        "size" -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenByDescending { it.size })
+        "date" -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenByDescending { it.lastModified })
+        else -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenBy { naturalKey(it.name) })
+    }
+
+    displayedItems = list
+    renderList()
+}
 
     private fun searchRecursive(dir: File, query: String, out: MutableList<FileItem>, depth: Int) {
         if (depth > 8) return
@@ -1275,7 +1274,7 @@ private fun refreshCategory(cat: String) {
             val sorted = when (sortBy) {
                 "size" -> found.sortedByDescending { it.size }
                 "date" -> found.sortedByDescending { it.lastModified }
-                else -> found.sortedBy { it.name.lowercase() }
+                else -> found.sortedBy { naturalKey(it.name) }
             }
             mainHandler.post { displayedItems = sorted; renderList() }
         }
