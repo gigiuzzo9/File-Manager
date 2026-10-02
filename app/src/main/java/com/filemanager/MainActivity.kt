@@ -113,11 +113,12 @@ class MainActivity : AppCompatActivity() {
     private val executor = Executors.newSingleThreadExecutor()
     private val heavyExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
-
+    private var isAppVisible = false
     private val storagePollRunnable = object : Runnable {
         private var lastSnapshot: String = ""
         override fun run() {
-            try {
+    if (!isAppVisible) return
+    try {
                 val sm = getSystemService(STORAGE_SERVICE) as StorageManager
                 val snapshot = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     sm.storageVolumes.joinToString("|") {
@@ -212,6 +213,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
     super.onResume()
+    isAppVisible = true
 
     mainHandler.removeCallbacks(storagePollRunnable)
     mainHandler.post(storagePollRunnable)
@@ -252,9 +254,10 @@ private fun refreshCategory(cat: String) {
     }
 }
     override fun onPause() {
-        super.onPause()
-        mainHandler.removeCallbacks(storagePollRunnable)
-    }
+    super.onPause()
+    isAppVisible = false
+    mainHandler.removeCallbacks(storagePollRunnable)
+}
 
     override fun onDestroy() {
         super.onDestroy()
