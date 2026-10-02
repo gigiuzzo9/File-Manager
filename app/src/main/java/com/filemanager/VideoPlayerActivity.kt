@@ -1,6 +1,11 @@
 package com.filemanager
 
+import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -28,6 +33,22 @@ class VideoPlayerActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private var isPrepared = false
 
+    private lateinit var audioManager: AudioManager
+    private var audioFocusRequest: AudioFocusRequest? = null
+
+    private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+        when (focusChange) {
+            AudioManager.AUDIOFOCUS_LOSS,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                if (isPrepared && videoView.isPlaying) {
+                    videoView.pause()
+                    btnPlayPause.setImageResource(android.R.drawable.ic_media_play)
+                }
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {}
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_video_player)
@@ -44,6 +65,8 @@ class VideoPlayerActivity : AppCompatActivity() {
             return
         }
 
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
         videoView = findViewById(R.id.videoView)
         controls = findViewById(R.id.controls)
         btnPlayPause = findViewById(R.id.btnPlayPause)
@@ -57,6 +80,7 @@ class VideoPlayerActivity : AppCompatActivity() {
             mp.isLooping = false
             seekBar.max = videoView.duration
             updateTimeLabel()
+            requestAudioFocus()
             videoView.start()
             btnPlayPause.setImageResource(android.R.drawable.ic_media_pause)
             startProgressUpdater()
@@ -78,6 +102,7 @@ class VideoPlayerActivity : AppCompatActivity() {
                 videoView.pause()
                 btnPlayPause.setImageResource(android.R.drawable.ic_media_play)
             } else {
+                requestAudioFocus()
                 videoView.start()
                 btnPlayPause.setImageResource(android.R.drawable.ic_media_pause)
             }
@@ -94,8 +119,38 @@ class VideoPlayerActivity : AppCompatActivity() {
             override fun onStopTrackingTouch(seekBar: SeekBar) {}
         })
 
-        // Tap sullo schermo → mostra/nascondi controlli
         videoView.setOnClickListener { toggleControls() }
+    }
+
+    private fun requestAudioFocus() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val attrs = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build()
+            audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(attrs)
+                .setOnAudioFocusChangeListener(audioFocusListener)
+                .build()
+            audioFocusRequest?.let { audioManager.requestAudioFocus(it) }
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.requestAudioFocus(
+                audioFocusListener,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN
+            )
+        }
+    }
+
+    private fun abandonAudioFocus() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+            audioFocusRequest = null
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.abandonAudioFocus(audioFocusListener)
+        }
     }
 
     private fun toggleControls() {
@@ -140,5 +195,14 @@ class VideoPlayerActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacksAndMessages(null)
+
+        try {
+            if (videoView.isPlaying) {
+                videoView.stopPlayback()
+            }
+            videoView.suspend()
+        } catch (_: Exception) {}
+
+        abandonAudioFocus()
     }
 }
