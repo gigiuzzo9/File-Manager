@@ -39,4 +39,4 @@ jobs:
         with:
           name: FileManager-APK
           path: app/build/outputs/apk/debug/FileManager.apk
-          retention-days: 30
+          retention-days: 2
