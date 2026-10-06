@@ -9,6 +9,7 @@ import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.engine.DiskCacheStrategy
+import com.bumptech.glide.signature.ObjectKey
 import java.io.File
 
 class FileAdapter(
@@ -72,6 +73,7 @@ class FileAdapter(
                     if (mime.startsWith("image/")) {
                         Glide.with(iconView.context)
                             .load(File(item.path))
+                            .signature(ObjectKey("${item.path}_${item.lastModified}"))
                             .diskCacheStrategy(DiskCacheStrategy.ALL)
                             .centerCrop()
                             .placeholder(R.drawable.images)
@@ -80,6 +82,7 @@ class FileAdapter(
                     } else if (mime.startsWith("video/")) {
                         Glide.with(iconView.context)
                             .load(File(item.path))
+                            .signature(ObjectKey("${item.path}_${item.lastModified}"))
                             .diskCacheStrategy(DiskCacheStrategy.ALL)
                             .centerCrop()
                             .placeholder(R.drawable.video)
