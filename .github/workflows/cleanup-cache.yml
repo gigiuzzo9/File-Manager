@@ -1,0 +1,16 @@
+name: Delete Action Cache
+on:
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: toshimaru/delete-action-cache@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repo: gigiuzzo9/File-Manager
+          limit: 100
