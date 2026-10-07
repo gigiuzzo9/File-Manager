@@ -1,0 +1,31 @@
+name: Cleanup All Repos
+on:
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clear caches and artifacts for all repos
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Elenco dei tuoi 4 repository
+          REPOS=("gigiuzzo9/Music-Player" "gigiuzzo9/File-Manager" "gigiuzzo9/Gallery" "gigiuzzo9/Widget-Data")
+
+          for REPO in "${REPOS[@]}"; do
+            echo "=== Cleaning $REPO ==="
+            
+            # Cancella TUTTE le cache
+            echo "Deleting caches..."
+            gh cache delete --all --repo "$REPO" --succeed-on-no-caches || true
+            
+            # Cancella TUTTI gli artifacts
+            echo "Deleting artifacts..."
+            gh api --paginate "/repos/$REPO/actions/artifacts" \
+              --jq '.artifacts[].id' \
+              | while read id; do
+                  gh api --method DELETE "/repos/$REPO/actions/artifacts/$id" --silent || true
+                done
+          done
+          echo "=== Done ==="
