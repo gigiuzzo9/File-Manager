@@ -2166,6 +2166,12 @@ private fun naturalKey(name: String): String {
                     newFile.setLastModified(System.currentTimeMillis())
                     updateInMediaStore(item.path, newFile.absolutePath)
                     scanPath(newFile.absolutePath)
+
+                    com.bumptech.glide.Glide.get(this).clearMemory()
+                    Thread {
+                        com.bumptech.glide.Glide.get(applicationContext).clearDiskCache()
+                    }.start()
+
                     Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
                     loadDirectory(currentPath); return@setPositiveButton
                 }
