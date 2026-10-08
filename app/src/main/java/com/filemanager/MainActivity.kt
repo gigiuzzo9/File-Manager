@@ -1115,30 +1115,21 @@ class MainActivity : AppCompatActivity() {
         var result: List<FileItem>? = null
         var needsSaf = false
 
-        if (!dir.exists()) {
-            // Cartella non esiste → errore
+        if (!dir.exists() || !dir.isDirectory) {
             mainHandler.post {
-                Toast.makeText(this, "Cartella non trovata", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Cartella non accessibile", Toast.LENGTH_SHORT).show()
             }
             return@execute
         }
 
-        if (!dir.isDirectory) {
-            mainHandler.post {
-                Toast.makeText(this, "Non è una cartella", Toast.LENGTH_SHORT).show()
-            }
-            return@execute
-        }
-
-        // Prova con File
+        // Prova con File (veloce)
         val files = dir.listFiles()
-        if (files == null) {
-            // File.listFiles() fallito → prova SAF
+        if (files == null || files.isEmpty()) {
+            // File.listFiles() fallito o vuoto → prova SAF
             val safResult = listDirViaSaf(path)
-            if (safResult != null) {
+            if (safResult != null && safResult.isNotEmpty()) {
                 result = safResult
             } else {
-                // SAF non disponibile → serve chiederlo
                 needsSaf = true
             }
         } else {
@@ -1156,19 +1147,16 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Se serve il SAF, chiedilo
+        // Se serve il SAF, chiedilo automaticamente
         if (needsSaf) {
             mainHandler.post {
-                if (!hasSafFor(path)) {
-                    requestSafForPath(path) {
-                        loadDirectory(path, resetCategory)
-                    }
+                requestSafForPath(path) {
+                    loadDirectory(path, resetCategory)
                 }
             }
             return@execute
         }
 
-        // Conta i figli per le cartelle
         val withCounts = result?.map { item ->
             if (item.isDirectory) {
                 try {
