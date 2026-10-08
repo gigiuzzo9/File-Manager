@@ -1103,58 +1103,70 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadDirectory(path: String, resetCategory: Boolean = false) {
-        currentPath = path
-        txtPath.text = path
-        if (resetCategory) {
-            activeCategory = null
-            searchQuery = ""
-        }
+    currentPath = path
+    txtPath.text = path
+    if (resetCategory) {
+        activeCategory = null
+        searchQuery = ""
+    }
 
-        executor.execute {
-            val dir = File(path)
-            val result: List<FileItem>? = if (!dir.exists() || !dir.isDirectory) {
+    executor.execute {
+        val dir = File(path)
+        val result: List<FileItem>? = if (!dir.exists() || !dir.isDirectory) {
+            listDirViaSaf(path)
+        } else {
+            val files = dir.listFiles()
+            if (files == null) {
+                // File.listFiles() ha fallito → probabilmente serve il SAF
                 listDirViaSaf(path)
             } else {
-                val files = dir.listFiles()
-                if (files == null) listDirViaSaf(path)
-                else {
-                    val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
-                    filtered.map { f ->
-                        FileItem(
-                            file = f,
-                            name = f.name,
-                            path = f.absolutePath,
-                            isDirectory = f.isDirectory,
-                            size = if (f.isFile) f.length() else 0L,
-                            lastModified = f.lastModified(),
-                            childrenCount = 0
-                        )
-                    }
+                val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
+                filtered.map { f ->
+                    FileItem(
+                        file = f,
+                        name = f.name,
+                        path = f.absolutePath,
+                        isDirectory = f.isDirectory,
+                        size = if (f.isFile) f.length() else 0L,
+                        lastModified = f.lastModified(),
+                        childrenCount = 0
+                    )
                 }
-            }
-
-            val withCounts = result?.map { item ->
-                if (item.isDirectory) {
-                    try {
-                        val count = item.file.list()?.let { arr ->
-                            if (showHidden) arr.size else arr.count { !it.startsWith(".") }
-                        } ?: 0
-                        item.copy(childrenCount = count)
-                    } catch (_: Exception) { item }
-                } else item
-            }
-
-            mainHandler.post {
-                if (withCounts == null) {
-                    Toast.makeText(this, "Cartella non accessibile", Toast.LENGTH_SHORT).show()
-                    return@post
-                }
-                allItems = withCounts
-                applyFilters()
-                updatePasteButton()
             }
         }
+
+        // Se anche il SAF ha fallito, chiedi il permesso
+        if (result == null && !hasSafFor(path) && !isInternalPath(path)) {
+            mainHandler.post {
+                requestSafForPath(path) {
+                    loadDirectory(path, resetCategory)
+                }
+            }
+            return@execute
+        }
+
+        val withCounts = result?.map { item ->
+            if (item.isDirectory) {
+                try {
+                    val count = item.file.list()?.let { arr ->
+                        if (showHidden) arr.size else arr.count { !it.startsWith(".") }
+                    } ?: 0
+                    item.copy(childrenCount = count)
+                } catch (_: Exception) { item }
+            } else item
+        }
+
+        mainHandler.post {
+            if (withCounts == null) {
+                Toast.makeText(this, "Cartella non accessibile", Toast.LENGTH_SHORT).show()
+                return@post
+            }
+            allItems = withCounts
+            applyFilters()
+            updatePasteButton()
+        }
     }
+}
 
     private fun listDirViaSaf(path: String): List<FileItem>? {
         val doc = getSafDocumentFile(path) ?: return null
