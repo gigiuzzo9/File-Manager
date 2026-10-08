@@ -62,7 +62,6 @@ class MainActivity : AppCompatActivity() {
         private const val ZIP_BUFFER_SIZE = 32768
         private val COPY_THREADS = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(4, 8)
         private const val PREFS_SAF_MAP = "saf_tree_uris_map"
-        private const val PREFS_SAF_INTERNAL_REQUESTED = "saf_requested_internal"
     }
 
     private lateinit var recycler: RecyclerView
@@ -117,8 +116,8 @@ class MainActivity : AppCompatActivity() {
     private val storagePollRunnable = object : Runnable {
         private var lastSnapshot: String = ""
         override fun run() {
-    if (!isAppVisible) return
-    try {
+            if (!isAppVisible) return
+            try {
                 val sm = getSystemService(STORAGE_SERVICE) as StorageManager
                 val snapshot = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     sm.storageVolumes.joinToString("|") {
@@ -212,52 +211,44 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onResume() {
-    super.onResume()
-    isAppVisible = true
+        super.onResume()
+        isAppVisible = true
 
-    mainHandler.removeCallbacks(storagePollRunnable)
-    mainHandler.post(storagePollRunnable)
+        mainHandler.removeCallbacks(storagePollRunnable)
+        mainHandler.post(storagePollRunnable)
 
-    if (hasStoragePermission()) {
-        val cat = activeCategory
-        if (cat != null) {
-            refreshCategory(cat)
-        } else {
-            loadDirectory(currentPath)
-        }
-
-        if (!hasSafFor(rootInternal) && !prefs.getBoolean(PREFS_SAF_INTERNAL_REQUESTED, false)) {
-            prefs.edit().putBoolean(PREFS_SAF_INTERNAL_REQUESTED, true).apply()
-            requestSafForPath(rootInternal) {
-                Toast.makeText(this, "Permesso completo concesso", Toast.LENGTH_SHORT).show()
-                updateStorageCards()
-                val c = activeCategory
-                if (c != null) refreshCategory(c) else loadDirectory(currentPath)
+        if (hasStoragePermission()) {
+            val cat = activeCategory
+            if (cat != null) {
+                refreshCategory(cat)
+            } else {
+                loadDirectory(currentPath)
             }
+            // ⚠️ NIENTE SAF per la memoria interna (usa solo MANAGE_EXTERNAL_STORAGE)
         }
+        updateStorageCards()
+        updatePasteButton()
     }
-    updateStorageCards()
-    updatePasteButton()
-}
 
-private fun refreshCategory(cat: String) {
-    txtPath.text = "Filtro: $cat"
-    executor.execute {
-        val found = mutableListOf<FileItem>()
-        try { scanRecursive(File(rootInternal), found, cat, 0) } catch (_: Exception) {}
-        val sorted = when (sortBy) {
-            "size" -> found.sortedByDescending { it.size }
-            "date" -> found.sortedByDescending { it.lastModified }
-            else -> found.sortedBy { naturalKey(it.name) }
+    private fun refreshCategory(cat: String) {
+        txtPath.text = "Filtro: $cat"
+        executor.execute {
+            val found = mutableListOf<FileItem>()
+            try { scanRecursive(File(rootInternal), found, cat, 0) } catch (_: Exception) {}
+            val sorted = when (sortBy) {
+                "size" -> found.sortedByDescending { it.size }
+                "date" -> found.sortedByDescending { it.lastModified }
+                else -> found.sortedBy { naturalKey(it.name) }
+            }
+            mainHandler.post { displayedItems = sorted; renderList() }
         }
-        mainHandler.post { displayedItems = sorted; renderList() }
     }
-}
+
     override fun onPause() {
-    super.onPause()
-    isAppVisible = false
-    mainHandler.removeCallbacks(storagePollRunnable)
-}
+        super.onPause()
+        isAppVisible = false
+        mainHandler.removeCallbacks(storagePollRunnable)
+    }
 
     override fun onDestroy() {
         super.onDestroy()
@@ -266,7 +257,7 @@ private fun refreshCategory(cat: String) {
     }
 
     // ============================================================
-    // GESTIONE PERMESSI SAF MULTIPLI
+    // GESTIONE PERMESSI SAF (solo per USB/SD esterne)
     // ============================================================
 
     private fun loadSafTreeUris() {
@@ -498,6 +489,16 @@ private fun refreshCategory(cat: String) {
     }
 
     private fun openDirectoryWithSafCheck(path: String) {
+        // Memoria interna → MAI SAF, solo MANAGE_EXTERNAL_STORAGE
+        if (path == rootInternal || path.startsWith("$rootInternal/")) {
+            if (hasStoragePermission()) {
+                loadDirectory(path)
+            } else {
+                requestStoragePermission()
+            }
+            return
+        }
+        // Volumi esterni (USB/SD) → SAF
         if (hasSafFor(path)) {
             loadDirectory(path)
             return
@@ -775,19 +776,19 @@ private fun refreshCategory(cat: String) {
     }
 
     private fun shareSelectedFiles() {
-    if (selectedPaths.isEmpty()) return
-    if (selectedPaths.size == 1) {
-        val path = selectedPaths.first()
-        val item = displayedItems.find { it.path == path }
-            ?: allItems.find { it.path == path }
-        if (item != null && !item.isDirectory) {
-            shareFile(item)
-            exitSelectionMode()
-        } else if (item != null && item.isDirectory) {
-            Toast.makeText(this, "Impossibile condividere una cartella", Toast.LENGTH_SHORT).show()
+        if (selectedPaths.isEmpty()) return
+        if (selectedPaths.size == 1) {
+            val path = selectedPaths.first()
+            val item = displayedItems.find { it.path == path }
+                ?: allItems.find { it.path == path }
+            if (item != null && !item.isDirectory) {
+                shareFile(item)
+                exitSelectionMode()
+            } else if (item != null && item.isDirectory) {
+                Toast.makeText(this, "Impossibile condividere una cartella", Toast.LENGTH_SHORT).show()
+            }
+            return
         }
-        return
-    }
 
         try {
             val uris = ArrayList<Uri>()
@@ -986,75 +987,67 @@ private fun refreshCategory(cat: String) {
     }
 
     private fun createStorageCard(vol: StorageVolumeInfo): LinearLayout {
-    val density = resources.displayMetrics.density
-    val card = LinearLayout(this)
-    card.orientation = LinearLayout.VERTICAL
-    card.setPadding((12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt())
-    card.isClickable = true
-    card.isFocusable = true
+        val density = resources.displayMetrics.density
+        val card = LinearLayout(this)
+        card.orientation = LinearLayout.VERTICAL
+        card.setPadding((12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt())
+        card.isClickable = true
+        card.isFocusable = true
 
-    // Rileva se il tema è scuro o chiaro
-    val isNightMode = (resources.configuration.uiMode and
-            android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
-            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        val isNightMode = (resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
 
-    // Colori in base al tema
-    val bgColor = if (isNightMode) {
-        Color.parseColor("#2A2A2A")   // grigio scuro (tema scuro)
-    } else {
-        Color.parseColor("#E0E0E0")   // grigio chiaro (tema chiaro)
-    }
-    val titleColor = if (isNightMode) {
-        Color.WHITE
-    } else {
-        Color.parseColor("#212121")   // quasi nero (tema chiaro)
-    }
-    val subtitleColor = if (isNightMode) {
-        Color.parseColor("#CCCCCC")
-    } else {
-        Color.parseColor("#666666")   // grigio medio (tema chiaro)
-    }
+        val bgColor = if (isNightMode) Color.parseColor("#2A2A2A") else Color.parseColor("#E0E0E0")
+        val titleColor = if (isNightMode) Color.WHITE else Color.parseColor("#212121")
+        val subtitleColor = if (isNightMode) Color.parseColor("#CCCCCC") else Color.parseColor("#666666")
 
-    val bg = GradientDrawable()
-    bg.setColor(bgColor)
-    bg.cornerRadius = 12 * density
-    card.background = bg
+        val bg = GradientDrawable()
+        bg.setColor(bgColor)
+        bg.cornerRadius = 12 * density
+        card.background = bg
 
-    val title = TextView(this)
-    title.text = vol.label
-    title.setTextColor(titleColor)
-    title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-    title.setTypeface(null, android.graphics.Typeface.BOLD)
-    card.addView(title)
+        val title = TextView(this)
+        title.text = vol.label
+        title.setTextColor(titleColor)
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        title.setTypeface(null, android.graphics.Typeface.BOLD)
+        card.addView(title)
 
-    val info = TextView(this)
-    if (vol.totalBytes > 0) {
-        val usedGb = vol.usedBytes / (1024.0 * 1024.0 * 1024.0)
-        val totalGb = vol.totalBytes / (1024.0 * 1024.0 * 1024.0)
-        info.text = String.format("%.1f GB / %.1f GB", usedGb, totalGb)
-    } else {
-        info.text = "Info non disponibili"
-    }
-    info.setTextColor(subtitleColor)
-    info.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-    info.setPadding(0, (2 * density).toInt(), 0, 0)
-    card.addView(info)
-
-    card.setOnClickListener {
-        activeCategory = null
-        searchQuery = ""
-        editSearch.setText("")
-        if (vol.path.isEmpty()) {
-            requestSafForPath(rootInternal)
-        } else if (vol.path == rootInternal) {
-            openDirectoryWithSafCheck(rootInternal)
+        val info = TextView(this)
+        if (vol.totalBytes > 0) {
+            val usedGb = vol.usedBytes / (1024.0 * 1024.0 * 1024.0)
+            val totalGb = vol.totalBytes / (1024.0 * 1024.0 * 1024.0)
+            info.text = String.format("%.1f GB / %.1f GB", usedGb, totalGb)
         } else {
-            tryAccessExternalVolume(vol.path)
+            info.text = "Info non disponibili"
         }
-    }
+        info.setTextColor(subtitleColor)
+        info.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+        info.setPadding(0, (2 * density).toInt(), 0, 0)
+        card.addView(info)
 
-    return card
-}
+        card.setOnClickListener {
+            activeCategory = null
+            searchQuery = ""
+            editSearch.setText("")
+            if (vol.path.isEmpty()) {
+                // Volume esterno senza path → SAF
+                requestSafForPath(rootInternal)
+            } else if (vol.path == rootInternal) {
+                // Memoria interna → MAI SAF
+                if (hasStoragePermission()) {
+                    loadDirectory(rootInternal, resetCategory = true)
+                } else {
+                    requestStoragePermission()
+                }
+            } else {
+                tryAccessExternalVolume(vol.path)
+            }
+        }
+
+        return card
+    }
 
     private fun tryAccessExternalVolume(path: String) {
         try {
@@ -1188,58 +1181,57 @@ private fun refreshCategory(cat: String) {
     }
 
     private fun applyFilters() {
-    var list = allItems.toList()
+        var list = allItems.toList()
 
-    if (searchQuery.isNotEmpty()) {
-        if (currentPath == rootInternal) {
-            val results = mutableListOf<FileItem>()
-            val q = searchQuery.lowercase()
-            try {
-                searchRecursive(File(rootInternal), q, results, 0)
-            } catch (_: Exception) {}
-            list = results
-        } else {
-            list = list.filter { it.name.lowercase().contains(searchQuery) }
+        if (searchQuery.isNotEmpty()) {
+            if (currentPath == rootInternal) {
+                val results = mutableListOf<FileItem>()
+                val q = searchQuery.lowercase()
+                try {
+                    searchRecursive(File(rootInternal), q, results, 0)
+                } catch (_: Exception) {}
+                list = results
+            } else {
+                list = list.filter { it.name.lowercase().contains(searchQuery) }
+            }
         }
-    }
 
-    if (activeCategory != null) {
-        list = list.filter { item ->
-            !item.isDirectory && categoryFor(item.name) == activeCategory
+        if (activeCategory != null) {
+            list = list.filter { item ->
+                !item.isDirectory && categoryFor(item.name) == activeCategory
+            }
         }
-    }
 
-    list = when (sortBy) {
-        "size" -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenByDescending { it.size })
-        "date" -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenByDescending { it.lastModified })
-        else -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenBy { naturalKey(it.name) })
-    }
-
-    displayedItems = list
-    renderList()
-}
-
-private fun naturalKey(name: String): String {
-    val sb = StringBuilder()
-    var i = 0
-    val lower = name.lowercase()
-    while (i < lower.length) {
-        val c = lower[i]
-        if (c.isDigit()) {
-            var j = i
-            while (j < lower.length && lower[j].isDigit()) j++
-            val numStr = lower.substring(i, j)
-            val num = numStr.toLongOrNull() ?: 0L
-            sb.append(String.format("%020d", num))
-            i = j
-        } else {
-            sb.append(c)
-            i++
+        list = when (sortBy) {
+            "size" -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenByDescending { it.size })
+            "date" -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenByDescending { it.lastModified })
+            else -> list.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenBy { naturalKey(it.name) })
         }
+
+        displayedItems = list
+        renderList()
     }
-    return sb.toString()
-}
-    
+
+    private fun naturalKey(name: String): String {
+        val sb = StringBuilder()
+        var i = 0
+        val lower = name.lowercase()
+        while (i < lower.length) {
+            val c = lower[i]
+            if (c.isDigit()) {
+                var j = i
+                while (j < lower.length && lower[j].isDigit()) j++
+                val numStr = lower.substring(i, j)
+                val num = numStr.toLongOrNull() ?: 0L
+                sb.append(String.format("%020d", num))
+                i = j
+            } else {
+                sb.append(c)
+                i++
+            }
+        }
+        return sb.toString()
+    }
 
     private fun searchRecursive(dir: File, query: String, out: MutableList<FileItem>, depth: Int) {
         if (depth > 8) return
@@ -1306,27 +1298,27 @@ private fun naturalKey(name: String): String {
     }
 
     private fun scanRecursive(dir: File, out: MutableList<FileItem>, cat: String, depth: Int) {
-    if (depth > 8) return
-    val dirName = dir.name
-    if (dirName == "Android" || dirName == ".trash" || dirName == ".thumbnails") return
+        if (depth > 8) return
+        val dirName = dir.name
+        if (dirName == "Android" || dirName == ".trash" || dirName == ".thumbnails") return
 
-    val files = dir.listFiles() ?: return
-    for (f in files) {
-        val name = f.name
-        if (!showHidden && name.startsWith(".")) continue
-        if (f.isDirectory) scanRecursive(f, out, cat, depth + 1)
-        else {
-            val match = if (cat == "documents") isDocumentFile(name) else categoryFor(name) == cat
-            if (match) {
-                val parentRelPath = try {
-                    dir.absolutePath.removePrefix(rootInternal).trimStart('/')
-                } catch (_: Exception) { "" }
-                val searchParentPath = if (parentRelPath.isEmpty()) "Memoria interna" else parentRelPath
-                out.add(FileItem(f, name, f.absolutePath, false, f.length(), f.lastModified(), 0, searchParentPath))
+        val files = dir.listFiles() ?: return
+        for (f in files) {
+            val name = f.name
+            if (!showHidden && name.startsWith(".")) continue
+            if (f.isDirectory) scanRecursive(f, out, cat, depth + 1)
+            else {
+                val match = if (cat == "documents") isDocumentFile(name) else categoryFor(name) == cat
+                if (match) {
+                    val parentRelPath = try {
+                        dir.absolutePath.removePrefix(rootInternal).trimStart('/')
+                    } catch (_: Exception) { "" }
+                    val searchParentPath = if (parentRelPath.isEmpty()) "Memoria interna" else parentRelPath
+                    out.add(FileItem(f, name, f.absolutePath, false, f.length(), f.lastModified(), 0, searchParentPath))
+                }
             }
         }
     }
-}
 
     private fun renderList() {
         val firstVisible = try {
@@ -1375,19 +1367,17 @@ private fun naturalKey(name: String): String {
     }
 
     // ============================================================
-    // APERTURA FILE — viewer immagini + player video/audio
+    // APERTURA FILE
     // ============================================================
 
     private fun openFileWithDefault(item: FileItem) {
         if (item.name.lowercase().endsWith(".apk")) { installApk(item); return }
 
-        // Immagini → viewer interno
         if (isImageFile(item.name)) {
             openImageViewer(item)
             return
         }
 
-        // Video e audio → player interno
         if (isMediaFile(item.name)) {
             openMediaPlayer(item)
             return
@@ -1434,8 +1424,6 @@ private fun naturalKey(name: String): String {
         intent.putExtra(VideoPlayerActivity.EXTRA_PATH, item.path)
         startActivity(intent)
     }
-
-    // ============================================================
 
     private fun installApk(item: FileItem) {
         try {
@@ -2152,48 +2140,49 @@ private fun naturalKey(name: String): String {
     }
 
     private fun renameItem(item: FileItem) {
-    val input = EditText(this)
-    input.setText(item.name)
-    AlertDialog.Builder(this)
-        .setTitle("Rinomina")
-        .setView(input)
-        .setPositiveButton("OK") { _, _ ->
-            val newName = input.text.toString().trim()
-            if (newName.isEmpty() || newName == item.name) return@setPositiveButton
-            try {
-                val newFile = File(item.file.parentFile, newName)
-                if (item.file.renameTo(newFile)) {
-                    newFile.setLastModified(System.currentTimeMillis())
-                    updateInMediaStore(item.path, newFile.absolutePath)
-                    scanPath(newFile.absolutePath)
+        val input = EditText(this)
+        input.setText(item.name)
+        AlertDialog.Builder(this)
+            .setTitle("Rinomina")
+            .setView(input)
+            .setPositiveButton("OK") { _, _ ->
+                val newName = input.text.toString().trim()
+                if (newName.isEmpty() || newName == item.name) return@setPositiveButton
+                try {
+                    val newFile = File(item.file.parentFile, newName)
+                    if (item.file.renameTo(newFile)) {
+                        newFile.setLastModified(System.currentTimeMillis())
+                        updateInMediaStore(item.path, newFile.absolutePath)
+                        scanPath(newFile.absolutePath)
 
-                    com.bumptech.glide.Glide.get(this).clearMemory()
-                    Thread {
-                        com.bumptech.glide.Glide.get(applicationContext).clearDiskCache()
-                    }.start()
+                        com.bumptech.glide.Glide.get(this).clearMemory()
+                        Thread {
+                            com.bumptech.glide.Glide.get(applicationContext).clearDiskCache()
+                        }.start()
 
-                    Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
-                    loadDirectory(currentPath); return@setPositiveButton
+                        Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
+                        loadDirectory(currentPath); return@setPositiveButton
+                    }
+                } catch (_: Exception) {}
+
+                val doc = getSafDocumentFile(item.path)
+                if (doc != null && doc.renameTo(newName)) {
+                    Toast.makeText(this, "Rinominato (SAF)", Toast.LENGTH_SHORT).show()
+                    loadDirectory(currentPath)
+                    return@setPositiveButton
                 }
-            } catch (_: Exception) {}
 
-            val doc = getSafDocumentFile(item.path)
-            if (doc != null && doc.renameTo(newName)) {
-                Toast.makeText(this, "Rinominato (SAF)", Toast.LENGTH_SHORT).show()
-                loadDirectory(currentPath)
-                return@setPositiveButton
-            }
-
-            if (!hasSafFor(item.path)) {
-                requestSafForPath(item.path) {
+                if (!hasSafFor(item.path)) {
+                    requestSafForPath(item.path) {
+                        Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
                     Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
                 }
-            } else {
-                Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
             }
-        }
-        .setNegativeButton("Annulla", null).show()
-}
+            .setNegativeButton("Annulla", null).show()
+    }
+
     private fun updateInMediaStore(oldPath: String, newPath: String) {
         try {
             if (File(newPath).isDirectory) return
@@ -2305,8 +2294,6 @@ private fun naturalKey(name: String): String {
         options.add("Aggiorna cartella")
         options.add(if (showHidden) "Nascondi file nascosti" else "Mostra file nascosti")
         options.add("Rinnova permesso scrittura")
-        options.add("Rimuovi tutti i permessi SAF")
-        options.add("Richiedi di nuovo permesso memoria interna")
 
         AlertDialog.Builder(this)
             .setTitle("Impostazioni")
@@ -2323,29 +2310,6 @@ private fun naturalKey(name: String): String {
                         safTreeUris.remove(volumeRoot)
                         saveSafTreeUris()
                         requestSafForPath(currentPath) {
-                            Toast.makeText(this, "Permesso rinnovato", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                    3 -> {
-                        try {
-                            for (perm in contentResolver.persistedUriPermissions) {
-                                contentResolver.releasePersistableUriPermission(
-                                    perm.uri,
-                                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                                )
-                            }
-                        } catch (_: Exception) {}
-                        safTreeUris.clear()
-                        saveSafTreeUris()
-                        prefs.edit().remove(PREFS_SAF_INTERNAL_REQUESTED).apply()
-                        Toast.makeText(this, "Permessi rimossi", Toast.LENGTH_SHORT).show()
-                        loadDirectory(rootInternal, resetCategory = true)
-                    }
-                    4 -> {
-                        prefs.edit().remove(PREFS_SAF_INTERNAL_REQUESTED).apply()
-                        safTreeUris.remove(rootInternal)
-                        saveSafTreeUris()
-                        requestSafForPath(rootInternal) {
                             Toast.makeText(this, "Permesso rinnovato", Toast.LENGTH_SHORT).show()
                         }
                     }
