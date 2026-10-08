@@ -1112,39 +1112,63 @@ class MainActivity : AppCompatActivity() {
 
     executor.execute {
         val dir = File(path)
-        val result: List<FileItem>? = if (!dir.exists() || !dir.isDirectory) {
-            listDirViaSaf(path)
-        } else {
-            val files = dir.listFiles()
-            if (files == null) {
-                // File.listFiles() ha fallito → probabilmente serve il SAF
-                listDirViaSaf(path)
+        var result: List<FileItem>? = null
+        var needsSaf = false
+
+        if (!dir.exists()) {
+            // Cartella non esiste → errore
+            mainHandler.post {
+                Toast.makeText(this, "Cartella non trovata", Toast.LENGTH_SHORT).show()
+            }
+            return@execute
+        }
+
+        if (!dir.isDirectory) {
+            mainHandler.post {
+                Toast.makeText(this, "Non è una cartella", Toast.LENGTH_SHORT).show()
+            }
+            return@execute
+        }
+
+        // Prova con File
+        val files = dir.listFiles()
+        if (files == null) {
+            // File.listFiles() fallito → prova SAF
+            val safResult = listDirViaSaf(path)
+            if (safResult != null) {
+                result = safResult
             } else {
-                val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
-                filtered.map { f ->
-                    FileItem(
-                        file = f,
-                        name = f.name,
-                        path = f.absolutePath,
-                        isDirectory = f.isDirectory,
-                        size = if (f.isFile) f.length() else 0L,
-                        lastModified = f.lastModified(),
-                        childrenCount = 0
-                    )
-                }
+                // SAF non disponibile → serve chiederlo
+                needsSaf = true
+            }
+        } else {
+            val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
+            result = filtered.map { f ->
+                FileItem(
+                    file = f,
+                    name = f.name,
+                    path = f.absolutePath,
+                    isDirectory = f.isDirectory,
+                    size = if (f.isFile) f.length() else 0L,
+                    lastModified = f.lastModified(),
+                    childrenCount = 0
+                )
             }
         }
 
-        // Se anche il SAF ha fallito, chiedi il permesso
-        if (result == null && !hasSafFor(path) && !isInternalPath(path)) {
+        // Se serve il SAF, chiedilo
+        if (needsSaf) {
             mainHandler.post {
-                requestSafForPath(path) {
-                    loadDirectory(path, resetCategory)
+                if (!hasSafFor(path)) {
+                    requestSafForPath(path) {
+                        loadDirectory(path, resetCategory)
+                    }
                 }
             }
             return@execute
         }
 
+        // Conta i figli per le cartelle
         val withCounts = result?.map { item ->
             if (item.isDirectory) {
                 try {
