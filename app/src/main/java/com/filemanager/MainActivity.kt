@@ -2152,42 +2152,42 @@ private fun naturalKey(name: String): String {
     }
 
     private fun renameItem(item: FileItem) {
-        val input = EditText(this)
-        input.setText(item.name)
-        AlertDialog.Builder(this)
-            .setTitle("Rinomina")
-            .setView(input)
-            .setPositiveButton("OK") { _, _ ->
-                val newName = input.text.toString().trim()
-                if (newName.isEmpty() || newName == item.name) return@setPositiveButton
-                try {
-                    val newFile = File(item.file.parentFile, newName)
-                    if (item.file.renameTo(newFile)) {
-                        updateInMediaStore(item.path, newFile.absolutePath)
-                        scanPath(newFile.absolutePath)
-                        Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
-                        loadDirectory(currentPath); return@setPositiveButton
-                    }
-                } catch (_: Exception) {}
-
-                val doc = getSafDocumentFile(item.path)
-                if (doc != null && doc.renameTo(newName)) {
-                    Toast.makeText(this, "Rinominato (SAF)", Toast.LENGTH_SHORT).show()
-                    loadDirectory(currentPath)
-                    return@setPositiveButton
+    val input = EditText(this)
+    input.setText(item.name)
+    AlertDialog.Builder(this)
+        .setTitle("Rinomina")
+        .setView(input)
+        .setPositiveButton("OK") { _, _ ->
+            val newName = input.text.toString().trim()
+            if (newName.isEmpty() || newName == item.name) return@setPositiveButton
+            try {
+                val newFile = File(item.file.parentFile, newName)
+                if (item.file.renameTo(newFile)) {
+                    newFile.setLastModified(System.currentTimeMillis())
+                    updateInMediaStore(item.path, newFile.absolutePath)
+                    scanPath(newFile.absolutePath)
+                    Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
+                    loadDirectory(currentPath); return@setPositiveButton
                 }
+            } catch (_: Exception) {}
 
-                if (!hasSafFor(item.path)) {
-                    requestSafForPath(item.path) {
-                        Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
-                    }
-                } else {
+            val doc = getSafDocumentFile(item.path)
+            if (doc != null && doc.renameTo(newName)) {
+                Toast.makeText(this, "Rinominato (SAF)", Toast.LENGTH_SHORT).show()
+                loadDirectory(currentPath)
+                return@setPositiveButton
+            }
+
+            if (!hasSafFor(item.path)) {
+                requestSafForPath(item.path) {
                     Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
                 }
+            } else {
+                Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
             }
-            .setNegativeButton("Annulla", null).show()
-    }
-
+        }
+        .setNegativeButton("Annulla", null).show()
+}
     private fun updateInMediaStore(oldPath: String, newPath: String) {
         try {
             if (File(newPath).isDirectory) return
