@@ -1115,24 +1115,11 @@ class MainActivity : AppCompatActivity() {
         var result: List<FileItem>? = null
         var needsSaf = false
 
-        if (!dir.exists() || !dir.isDirectory) {
-            mainHandler.post {
-                Toast.makeText(this, "Cartella non accessibile", Toast.LENGTH_SHORT).show()
-            }
-            return@execute
-        }
+        // Prova con File PRIMA (senza uscire se exists() è false)
+        val files = if (dir.exists() && dir.isDirectory) dir.listFiles() else null
 
-        // Prova con File (veloce)
-        val files = dir.listFiles()
-        if (files == null || files.isEmpty()) {
-            // File.listFiles() fallito o vuoto → prova SAF
-            val safResult = listDirViaSaf(path)
-            if (safResult != null && safResult.isNotEmpty()) {
-                result = safResult
-            } else {
-                needsSaf = true
-            }
-        } else {
+        if (files != null && files.isNotEmpty()) {
+            // File ha funzionato
             val filtered = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
             result = filtered.map { f ->
                 FileItem(
@@ -1144,6 +1131,18 @@ class MainActivity : AppCompatActivity() {
                     lastModified = f.lastModified(),
                     childrenCount = 0
                 )
+            }
+        } else {
+            // File non ha funzionato → prova SAF
+            val safResult = listDirViaSaf(path)
+            if (safResult != null && safResult.isNotEmpty()) {
+                result = safResult
+            } else if (safResult != null) {
+                // SAF funziona ma cartella vuota
+                result = safResult
+            } else {
+                // SAF non disponibile → chiedilo
+                needsSaf = true
             }
         }
 
