@@ -2,7 +2,7 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:minHeight="120dp"
+    android:minHeight="132dp"
     android:orientation="vertical"
     android:gravity="center"
     android:padding="4dp"
@@ -10,8 +10,8 @@
 
     <ImageView
         android:id="@+id/itemIcon"
-        android:layout_width="56dp"
-        android:layout_height="56dp"
+        android:layout_width="62dp"
+        android:layout_height="62dp"
         android:scaleType="centerCrop"
         android:contentDescription="" />
 
@@ -20,7 +20,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingTop="4dp"
-        android:textSize="11sp"
+        android:textSize="12sp"
         android:maxLines="2"
         android:ellipsize="middle"
         android:gravity="center" />
@@ -29,7 +29,7 @@
         android:id="@+id/itemMeta"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textSize="9sp"
+        android:textSize="10sp"
         android:alpha="0.6"
         android:gravity="center" />
 
