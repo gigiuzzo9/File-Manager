@@ -38,14 +38,12 @@
             </intent-filter>
         </activity>
 
-        <!-- Visualizzatore immagini -->
         <activity
             android:name=".ImageViewerActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode|smallestScreenSize|density"
             android:theme="@style/AppTheme" />
 
-        <!-- Player video/audio -->
         <activity
             android:name=".VideoPlayerActivity"
             android:exported="false"
@@ -69,6 +67,3 @@
     </application>
 
 </manifest>
-
-
-rifammi il file corretto
