@@ -227,8 +227,6 @@ class MainActivity : AppCompatActivity() {
                 loadDirectory(currentPath)
             }
         }
-        // NON chiediamo più automaticamente il SAF all'avvio: la Gallery non lo fa.
-        // Le operazioni che richiedono SAF lo chiederanno al momento, solo se File API fallisce.
 
         updateStorageCards()
         updatePasteButton()
@@ -261,7 +259,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // GESTIONE PERMESSI SAF MULTIPLI
+    // GESTIONE PERMESSI SAF
     // ============================================================
 
     private fun loadSafTreeUris() {
@@ -493,18 +491,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openDirectoryWithSafCheck(path: String) {
-        // Prova sempre ad aprire con File API.
         val dir = File(path)
         if (dir.exists() && dir.isDirectory && dir.canRead()) {
             loadDirectory(path)
             return
         }
-        // Fallback: se la cartella non è leggibile con File API, prova via SAF se già configurato.
         if (hasSafFor(path)) {
             loadDirectory(path)
             return
         }
-        // Altrimenti chiedi SAF (serve per poter leggere la cartella)
         requestSafForPath(path) {
             Toast.makeText(this, "Permesso necessario per accedere a questo volume", Toast.LENGTH_LONG).show()
             loadDirectory(rootInternal, resetCategory = true)
@@ -600,9 +595,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun performDelete(pathsToDelete: List<String>) {
-        // NON nascondiamo prima: aspettiamo l'esito reale.
-        // Aggiorneremo la lista dopo aver saputo quanti sono stati eliminati davvero.
-
         executor.execute {
             var deleted = 0
             var failed = 0
@@ -614,7 +606,6 @@ class MainActivity : AppCompatActivity() {
                     val f = File(path)
                     ok = if (f.isDirectory) deleteRecursivelyFast(f) else f.delete()
                     if (!ok) {
-                        // Fallback SAF solo se già configurato
                         ok = deleteViaSafTree(path)
                     }
                 } catch (e: Exception) {
@@ -645,8 +636,6 @@ class MainActivity : AppCompatActivity() {
                     ).show()
                 }
 
-                // Se alcuni falliscono e non c'è SAF configurato per quei path,
-                // chiediamo UNA VOLTA il SAF e suggeriamo di riprovare.
                 if (finalFailed > 0) {
                     val firstMissing = finalFailedPaths.firstOrNull { !hasSafFor(it) }
                     if (firstMissing != null) {
@@ -667,7 +656,6 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                // Ricarica la cartella per riflettere lo stato reale
                 loadDirectory(currentPath)
             }
         }
@@ -769,7 +757,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // Niente placeholder fantasma: aggiorneremo la lista al termine, come fa la Gallery.
         val pendingCopy = mutableListOf<Pair<String, File>>()
 
         for (srcPath in existingSrc) {
@@ -810,7 +797,6 @@ class MainActivity : AppCompatActivity() {
                     var ok = false
                     var renamed = false
 
-                    // 1) Se cut: prova rename diretto (stesso filesystem)
                     if (finalAction == "cut") {
                         try {
                             renamed = src.renameTo(dst)
@@ -818,7 +804,6 @@ class MainActivity : AppCompatActivity() {
                         } catch (_: Exception) {}
                     }
 
-                    // 2) Prova File API: copia vera
                     if (!ok) {
                         try {
                             if (src.isDirectory) {
@@ -832,7 +817,6 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
-                    // 3) Fallback SAF (solo se già configurato)
                     if (!ok) {
                         try {
                             ok = if (src.isDirectory) copyDirectoryViaSaf(src, dst) else copyFileViaSaf(src, dst)
@@ -844,7 +828,6 @@ class MainActivity : AppCompatActivity() {
                     if (ok) {
                         copied++
 
-                        // Se era cut e non abbiamo rinominato, elimina l'originale
                         if (finalAction == "cut" && !renamed &&
                             dst.absolutePath != src.absolutePath && src.exists()) {
                             try {
@@ -876,7 +859,6 @@ class MainActivity : AppCompatActivity() {
                         Toast.LENGTH_SHORT
                     ).show()
                 } else if (finalFailed > 0) {
-                    // Chiedi SAF una volta se mancante
                     val firstMissing = finalFailedSrc.firstOrNull { !hasSafFor(it) }
                     if (firstMissing != null) {
                         requestSafForPath(firstMissing) {
@@ -1103,7 +1085,6 @@ class MainActivity : AppCompatActivity() {
             var ok = false
             var errorMsg = ""
 
-            // 1) Prova File API per primo (come Gallery)
             try {
                 val zipFile = File(currentPath, finalZipName)
                 var addedCount = 0
@@ -1126,7 +1107,6 @@ class MainActivity : AppCompatActivity() {
                 try { File(currentPath, finalZipName).delete() } catch (_: Exception) {}
             }
 
-            // 2) Fallback SAF
             if (!ok) {
                 try {
                     ok = comprimiZipMultiViaSaf(pathsToZip, finalZipName)
@@ -1316,7 +1296,6 @@ class MainActivity : AppCompatActivity() {
                 val newName = input.text.toString().trim()
                 if (newName.isEmpty() || newName == item.name) return@setPositiveButton
 
-                // 1) File API (come Gallery)
                 try {
                     val newFile = File(item.file.parentFile, newName)
                     if (newFile.exists()) {
@@ -1341,7 +1320,6 @@ class MainActivity : AppCompatActivity() {
                     Log.e(TAG, "renameTo error", e)
                 }
 
-                // 2) Fallback SAF solo se già configurato
                 val doc = getSafDocumentFile(item.path)
                 if (doc != null && doc.renameTo(newName)) {
                     Toast.makeText(this, "Rinominato (SAF)", Toast.LENGTH_SHORT).show()
@@ -1349,7 +1327,6 @@ class MainActivity : AppCompatActivity() {
                     return@setPositiveButton
                 }
 
-                // 3) Se SAF mancante, chiedilo (una volta) e suggerisci di riprovare
                 if (!hasSafFor(item.path)) {
                     requestSafForPath(item.path) {
                         Toast.makeText(this, "Autorizza l'accesso per rinominare. Riprova.", Toast.LENGTH_LONG).show()
@@ -1415,7 +1392,6 @@ class MainActivity : AppCompatActivity() {
                 val name = input.text.toString().trim()
                 if (name.isEmpty()) return@setPositiveButton
 
-                // 1) File API
                 try {
                     val newDir = File(currentPath, name)
                     if (newDir.mkdir()) {
@@ -1426,7 +1402,6 @@ class MainActivity : AppCompatActivity() {
                     }
                 } catch (_: Exception) {}
 
-                // 2) SAF se già configurato
                 val parent = getSafDocumentFile(currentPath)
                 if (parent != null && parent.createDirectory(name) != null) {
                     Toast.makeText(this, "Cartella creata (SAF)", Toast.LENGTH_SHORT).show()
@@ -1434,7 +1409,6 @@ class MainActivity : AppCompatActivity() {
                     return@setPositiveButton
                 }
 
-                // 3) Altrimenti chiedi SAF
                 if (!hasSafFor(currentPath)) {
                     requestSafForPath(currentPath) {
                         Toast.makeText(this, "Autorizza l'accesso per creare. Riprova.", Toast.LENGTH_LONG).show()
