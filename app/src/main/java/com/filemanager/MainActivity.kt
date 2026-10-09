@@ -577,6 +577,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
+    // UTILITY: TEST SCRITTURA CARTELLA (come Amaze checkFolder)
+    // ============================================================
+
+    private fun isFolderWritable(folder: File): Boolean {
+        return try {
+            val dummy = File(folder, ".fm_dummy_${System.currentTimeMillis()}")
+            val created = dummy.createNewFile()
+            if (created) dummy.delete()
+            created
+        } catch (e: Exception) {
+            Log.e(TAG, "isFolderWritable failed: ${folder.absolutePath}", e)
+            false
+        }
+    }
+
+    // ============================================================
     // ELIMINA
     // ============================================================
 
@@ -598,18 +614,21 @@ class MainActivity : AppCompatActivity() {
         executor.execute {
             var deleted = 0
             var failed = 0
-            val failedPaths = mutableListOf<String>()
+            var needSaf = false
 
             for (path in pathsToDelete) {
-                var ok = false
-                try {
-                    val f = File(path)
-                    ok = if (f.isDirectory) deleteRecursivelyFast(f) else f.delete()
-                    if (!ok) {
-                        ok = deleteViaSafTree(path)
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "delete error: $path", e)
+                val f = File(path)
+                val parent = f.parentFile
+
+                if (parent == null || !isFolderWritable(parent)) {
+                    needSaf = true
+                    failed++
+                    continue
+                }
+
+                var ok = if (f.isDirectory) deleteRecursivelyFast(f) else f.delete()
+                if (!ok) {
+                    ok = deleteViaSafTree(path)
                 }
 
                 if (ok) {
@@ -617,13 +636,14 @@ class MainActivity : AppCompatActivity() {
                     try { scanPath(path) } catch (_: Exception) {}
                 } else {
                     failed++
-                    failedPaths.add(path)
+                    if (!hasSafFor(path)) needSaf = true
                 }
             }
 
             val finalDeleted = deleted
             val finalFailed = failed
-            val finalFailedPaths = failedPaths.toList()
+            val finalNeedSaf = needSaf
+            val finalPaths = pathsToDelete
 
             mainHandler.post {
                 exitSelectionMode()
@@ -636,23 +656,17 @@ class MainActivity : AppCompatActivity() {
                     ).show()
                 }
 
-                if (finalFailed > 0) {
-                    val firstMissing = finalFailedPaths.firstOrNull { !hasSafFor(it) }
+                if (finalNeedSaf && finalFailed > 0) {
+                    val firstMissing = finalPaths.firstOrNull { !hasSafFor(it) }
                     if (firstMissing != null) {
                         requestSafForPath(firstMissing) {
                             Toast.makeText(
                                 this,
-                                "Autorizza l'accesso alla root per poter eliminare. Riprova.",
+                                "Autorizza l'accesso alla root per eliminare. Riprova.",
                                 Toast.LENGTH_LONG
                             ).show()
                         }
                         return@post
-                    } else {
-                        Toast.makeText(
-                            this,
-                            "Alcuni file non eliminabili (protetti dal sistema)",
-                            Toast.LENGTH_LONG
-                        ).show()
                     }
                 }
 
@@ -1283,7 +1297,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ============================================================
-    // RINOMINA
+    // RINOMINA (con copia + delete come Amaze)
     // ============================================================
 
     private fun renameItem(item: FileItem) {
@@ -1296,35 +1310,49 @@ class MainActivity : AppCompatActivity() {
                 val newName = input.text.toString().trim()
                 if (newName.isEmpty() || newName == item.name) return@setPositiveButton
 
-                try {
-                    val newFile = File(item.file.parentFile, newName)
-                    if (newFile.exists()) {
-                        Toast.makeText(this, "Esiste già un file con questo nome", Toast.LENGTH_SHORT).show()
-                        return@setPositiveButton
-                    }
-                    if (item.file.renameTo(newFile)) {
-                        newFile.setLastModified(System.currentTimeMillis())
-                        updateInMediaStore(item.path, newFile.absolutePath)
-                        scanPath(newFile.absolutePath)
-
-                        com.bumptech.glide.Glide.get(this).clearMemory()
-                        Thread {
-                            com.bumptech.glide.Glide.get(applicationContext).clearDiskCache()
-                        }.start()
-
-                        Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
-                        loadDirectory(currentPath)
-                        return@setPositiveButton
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "renameTo error", e)
+                val parentDir = item.file.parentFile
+                if (parentDir == null) {
+                    Toast.makeText(this, "Cartella non valida", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
                 }
 
-                val doc = getSafDocumentFile(item.path)
-                if (doc != null && doc.renameTo(newName)) {
-                    Toast.makeText(this, "Rinominato (SAF)", Toast.LENGTH_SHORT).show()
-                    loadDirectory(currentPath)
+                val newFile = File(parentDir, newName)
+                if (newFile.exists()) {
+                    Toast.makeText(this, "Esiste già un file con questo nome", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
+                }
+
+                val writable = isFolderWritable(parentDir)
+                Log.d(TAG, "renameItem: parent writable=$writable")
+
+                if (writable) {
+                    try {
+                        if (item.file.renameTo(newFile)) {
+                            afterRename(item, newFile)
+                            return@setPositiveButton
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "renameTo error", e)
+                    }
+
+                    try {
+                        if (item.file.isDirectory) {
+                            copyDirectoryRecursiveParallel(
+                                item.file, newFile,
+                                Executors.newFixedThreadPool(COPY_THREADS)
+                            )
+                            deleteRecursivelyFast(item.file)
+                        } else {
+                            copyFile(item.file, newFile)
+                            item.file.delete()
+                        }
+                        if (newFile.exists()) {
+                            afterRename(item, newFile)
+                            return@setPositiveButton
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "copy+delete failed", e)
+                    }
                 }
 
                 if (!hasSafFor(item.path)) {
@@ -1332,10 +1360,27 @@ class MainActivity : AppCompatActivity() {
                         Toast.makeText(this, "Autorizza l'accesso per rinominare. Riprova.", Toast.LENGTH_LONG).show()
                     }
                 } else {
-                    Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
+                    val doc = getSafDocumentFile(item.path)
+                    if (doc != null && doc.renameTo(newName)) {
+                        afterRename(item, newFile)
+                    } else {
+                        Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
             .setNegativeButton("Annulla", null).show()
+    }
+
+    private fun afterRename(oldItem: FileItem, newFile: File) {
+        newFile.setLastModified(System.currentTimeMillis())
+        updateInMediaStore(oldItem.path, newFile.absolutePath)
+        scanPath(newFile.absolutePath)
+        com.bumptech.glide.Glide.get(this).clearMemory()
+        Thread {
+            com.bumptech.glide.Glide.get(applicationContext).clearDiskCache()
+        }.start()
+        Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
+        loadDirectory(currentPath)
     }
 
     private fun updateInMediaStore(oldPath: String, newPath: String) {
