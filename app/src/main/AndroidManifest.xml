@@ -2,17 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Permessi legacy per Android ≤ 12 -->
-    <uses-permission
-        android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
-    <uses-permission
-        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="29" />
+    <!-- Come Fossify: WRITE_EXTERNAL_STORAGE senza maxSdkVersion -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 
-    <!-- Permesso speciale per Android 11+: accesso completo a tutti i file.
-         Da solo, senza i permessi READ_MEDIA_*, evita il conflitto che su
-         alcune ROM (Huawei/EMUI) blocca File.renameTo() e File.delete(). -->
+    <!-- Permesso speciale per Android 11+ -->
     <uses-permission
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
@@ -69,5 +62,4 @@
             android:exported="false" />
 
     </application>
-
 </manifest>
