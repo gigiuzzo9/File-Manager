@@ -2117,6 +2117,19 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) { false }
     }
 
+    private val browserCache = mutableMapOf<String, Boolean>()
+
+    private fun isBrowser(pkgName: String): Boolean {
+        browserCache[pkgName]?.let { return it }
+        val result = try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("http://example.com"))
+            intent.setPackage(pkgName)
+            packageManager.queryIntentActivities(intent, 0).isNotEmpty()
+        } catch (_: Exception) { false }
+        browserCache[pkgName] = result
+        return result
+    }
+
     private fun showCustomAppPicker(item: FileItem, mimeType: String, categoryKey: String) {
         try {
             val uri = FileProvider.getUriForFile(this, "$packageName.provider", item.file)
@@ -2126,15 +2139,20 @@ class MainActivity : AppCompatActivity() {
             }
             val filtered = packageManager.queryIntentActivities(probe, 0)
                 .filter { it.activityInfo.packageName != packageName }
+                .filter { ri -> !isBrowser(ri.activityInfo.packageName) }
 
             if (filtered.isEmpty()) {
-                Toast.makeText(this, "Nessuna app per aprire questo file", Toast.LENGTH_LONG).show(); return
+                Toast.makeText(this, "Nessuna app per aprire questo file", Toast.LENGTH_LONG).show()
+                return
             }
+
             if (filtered.size == 1) {
                 val app = filtered.first()
                 prefs.edit().putString("app_for_$categoryKey", app.activityInfo.packageName).apply()
-                openWithResolveInfo(item, app, uri, mimeType); return
+                openWithResolveInfo(item, app, uri, mimeType)
+                return
             }
+
             val density = resources.displayMetrics.density
             val adapter = object : BaseAdapter() {
                 override fun getCount() = filtered.size
@@ -2146,12 +2164,16 @@ class MainActivity : AppCompatActivity() {
                     val iconView = view.findViewById<ImageView>(android.R.id.icon)
                     val textView = view.findViewById<TextView>(android.R.id.text1)
                     val params = iconView.layoutParams
-                    params.width = (64 * density).toInt(); params.height = (64 * density).toInt()
+                    params.width = (64 * density).toInt()
+                    params.height = (64 * density).toInt()
                     iconView.layoutParams = params
                     iconView.setImageDrawable(app.loadIcon(packageManager))
                     textView.text = app.loadLabel(packageManager).toString()
                     textView.textSize = 20f
-                    textView.setPadding((20 * density).toInt(), (20 * density).toInt(), (20 * density).toInt(), (20 * density).toInt())
+                    textView.setPadding(
+                        (20 * density).toInt(), (20 * density).toInt(),
+                        (20 * density).toInt(), (20 * density).toInt()
+                    )
                     return view
                 }
             }
@@ -2201,29 +2223,77 @@ class MainActivity : AppCompatActivity() {
             l.endsWith(".gif") -> "image/gif"
             l.endsWith(".webp") -> "image/webp"
             l.endsWith(".bmp") -> "image/bmp"
+            l.endsWith(".svg") -> "image/svg+xml"
+            l.endsWith(".heic") -> "image/heic"
+            l.endsWith(".heif") -> "image/heif"
+            l.endsWith(".ico") -> "image/x-icon"
             l.endsWith(".mp3") -> "audio/mpeg"
             l.endsWith(".wav") -> "audio/wav"
             l.endsWith(".ogg") -> "audio/ogg"
             l.endsWith(".m4a") -> "audio/mp4"
+            l.endsWith(".aac") -> "audio/aac"
+            l.endsWith(".flac") -> "audio/flac"
+            l.endsWith(".opus") -> "audio/opus"
             l.endsWith(".mp4") -> "video/mp4"
             l.endsWith(".mkv") -> "video/x-matroska"
             l.endsWith(".avi") -> "video/x-msvideo"
             l.endsWith(".mov") -> "video/quicktime"
             l.endsWith(".webm") -> "video/webm"
+            l.endsWith(".3gp") -> "video/3gpp"
             l.endsWith(".pdf") -> "application/pdf"
-            l.endsWith(".zip") -> "application/zip"
-            l.endsWith(".rar") -> "application/x-rar-compressed"
-            l.endsWith(".txt") -> "text/plain"
-            l.endsWith(".html") || l.endsWith(".htm") -> "text/html"
-            l.endsWith(".json") -> "application/json"
-            l.endsWith(".xml") -> "text/xml"
             l.endsWith(".doc") -> "application/msword"
             l.endsWith(".docx") -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             l.endsWith(".xls") -> "application/vnd.ms-excel"
             l.endsWith(".xlsx") -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             l.endsWith(".ppt") -> "application/vnd.ms-powerpoint"
             l.endsWith(".pptx") -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            l.endsWith(".odt") -> "application/vnd.oasis.opendocument.text"
+            l.endsWith(".ods") -> "application/vnd.oasis.opendocument.spreadsheet"
+            l.endsWith(".odp") -> "application/vnd.oasis.opendocument.presentation"
+            l.endsWith(".epub") -> "application/epub+zip"
+            l.endsWith(".txt") -> "text/plain"
+            l.endsWith(".log") -> "text/plain"
+            l.endsWith(".md") -> "text/markdown"
+            l.endsWith(".html") || l.endsWith(".htm") -> "text/html"
+            l.endsWith(".css") -> "text/css"
+            l.endsWith(".csv") -> "text/csv"
+            l.endsWith(".xml") -> "application/xml"
+            l.endsWith(".json") -> "application/json"
+            l.endsWith(".js") || l.endsWith(".mjs") -> "application/javascript"
+            l.endsWith(".ts") -> "application/typescript"
+            l.endsWith(".py") -> "text/x-python"
+            l.endsWith(".java") -> "text/x-java"
+            l.endsWith(".kt") || l.endsWith(".kts") -> "text/x-kotlin"
+            l.endsWith(".c") -> "text/x-c"
+            l.endsWith(".cpp") || l.endsWith(".cc") || l.endsWith(".cxx") -> "text/x-c++"
+            l.endsWith(".h") || l.endsWith(".hpp") -> "text/x-c"
+            l.endsWith(".cs") -> "text/x-csharp"
+            l.endsWith(".php") -> "application/x-httpd-php"
+            l.endsWith(".rb") -> "text/x-ruby"
+            l.endsWith(".go") -> "text/x-go"
+            l.endsWith(".rs") -> "text/x-rust"
+            l.endsWith(".swift") -> "text/x-swift"
+            l.endsWith(".sh") -> "application/x-sh"
+            l.endsWith(".bat") -> "application/x-bat"
+            l.endsWith(".ps1") -> "application/x-powershell"
+            l.endsWith(".yml") || l.endsWith(".yaml") -> "application/x-yaml"
+            l.endsWith(".toml") -> "application/toml"
+            l.endsWith(".ini") || l.endsWith(".cfg") || l.endsWith(".conf") -> "text/plain"
+            l.endsWith(".sql") -> "application/sql"
+            l.endsWith(".properties") -> "text/plain"
+            l.endsWith(".gradle") -> "text/plain"
+            l.endsWith(".zip") -> "application/zip"
+            l.endsWith(".rar") -> "application/x-rar-compressed"
+            l.endsWith(".7z") -> "application/x-7z-compressed"
+            l.endsWith(".tar") -> "application/x-tar"
+            l.endsWith(".gz") -> "application/gzip"
+            l.endsWith(".bz2") -> "application/x-bzip2"
+            l.endsWith(".xz") -> "application/x-xz"
             l.endsWith(".apk") -> "application/vnd.android.package-archive"
+            l.endsWith(".ttf") -> "font/ttf"
+            l.endsWith(".otf") -> "font/otf"
+            l.endsWith(".woff") -> "font/woff"
+            l.endsWith(".woff2") -> "font/woff2"
             else -> "*/*"
         }
     }
