@@ -1386,30 +1386,43 @@ class MainActivity : AppCompatActivity() {
  * quando il filesystem è case-insensitive (Android lo è).
  */
 private fun renameCaseOnly(file: File, newName: String): Boolean {
-    return try {
-        val newFile = File(file.parentFile, newName)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            // Files.move() con ATOMIC_MOVE gestisce correttamente il case-only rename
-            Files.move(
-                file.toPath(),
-                newFile.toPath(),
-                java.nio.file.StandardCopyOption.REPLACE_EXISTING
-            )
-        } else {
-            // Fallback per Android < 8: giro a due passi
-            val tempName = "temp_${System.currentTimeMillis()}_${file.name}"
-            val tempFile = File(file.parentFile, tempName)
-            if (!file.renameTo(tempFile)) return false
-            if (!tempFile.renameTo(newFile)) {
-                tempFile.renameTo(file)
-                return false
-            }
-        }
-        true
-    } catch (e: Exception) {
-        Log.e(TAG, "renameCaseOnly error: ${file.absolutePath} -> $newName", e)
-        false
+    val parent = file.parentFile ?: return false
+    val finalFile = File(parent, newName)
+
+    // Passo 1: rename in nome temporaneo unico
+    val tempName = "tmp_${System.currentTimeMillis()}_${file.name}"
+    val tempFile = File(parent, tempName)
+
+    if (!file.renameTo(tempFile)) {
+        Log.e(TAG, "renameCaseOnly: step 1 (renameTo temp) failed")
+        return false
     }
+    if (!tempFile.exists()) {
+        Log.e(TAG, "renameCaseOnly: step 1 verified FAILED (tempFile doesn't exist)")
+        return false
+    }
+
+    // Passo 2: rename dal temporaneo al nome finale
+    if (!tempFile.renameTo(finalFile)) {
+        Log.e(TAG, "renameCaseOnly: step 2 (renameTo final) failed")
+        tempFile.renameTo(file)
+        return false
+    }
+
+    // Passo 3: verifica che esista un file con il nome ESATTO (case-sensitive)
+    val filesInDir = parent.listFiles()
+    val exists = filesInDir?.any { it.name == newName } == true
+
+    if (!exists) {
+        Log.e(TAG, "renameCaseOnly: step 3 verified FAILED - no file named $newName")
+        if (finalFile.exists()) {
+            finalFile.renameTo(file)
+        }
+        return false
+    }
+
+    Log.d(TAG, "renameCaseOnly: SUCCESS ${file.name} -> $newName")
+    return true
 }
 
     private fun updateInMediaStore(oldPath: String, newPath: String) {
