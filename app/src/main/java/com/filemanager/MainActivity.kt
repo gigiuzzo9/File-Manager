@@ -528,9 +528,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updatePasteButton() {
-        val shouldShow = !selectionMode && clipboardPaths.isNotEmpty()
-        btnPaste.visibility = if (shouldShow) View.VISIBLE else View.GONE
-    }
+    val shouldShow = !selectionMode && clipboardPaths.isNotEmpty()
+    Log.d(TAG, "updatePasteButton: shouldShow=$shouldShow selectionMode=$selectionMode clipSize=${clipboardPaths.size}")
+    btnPaste.visibility = if (shouldShow) View.VISIBLE else View.GONE
+}
 
     private fun enterSelectionMode(item: FileItem) {
         selectionMode = true
