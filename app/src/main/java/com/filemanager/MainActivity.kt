@@ -1307,59 +1307,84 @@ class MainActivity : AppCompatActivity() {
     // ============================================================
 
     private fun renameItem(item: FileItem) {
-        val input = EditText(this)
-        input.setText(item.name)
-        AlertDialog.Builder(this)
-            .setTitle("Rinomina")
-            .setView(input)
-            .setPositiveButton("OK") { _, _ ->
-                val newName = input.text.toString().trim()
-                if (newName.isEmpty() || newName == item.name) return@setPositiveButton
+    val input = EditText(this)
+    input.setText(item.name)
+    AlertDialog.Builder(this)
+        .setTitle("Rinomina")
+        .setView(input)
+        .setPositiveButton("OK") { _, _ ->
+            val newName = input.text.toString().trim()
+            if (newName.isEmpty() || newName == item.name) return@setPositiveButton
 
-                // 1) File API (come Gallery)
+            // === CASO 1: rename "case-only" (solo maiuscole/minuscole cambiate) ===
+            if (newName.equals(item.name, ignoreCase = true)) {
+                // Giro a due passi: prima rinomina in un nome temporaneo unico
                 try {
-                    val newFile = File(item.file.parentFile, newName)
-                    if (newFile.exists()) {
-                        Toast.makeText(this, "Esiste già un file con questo nome", Toast.LENGTH_SHORT).show()
-                        return@setPositiveButton
+                    val parent = item.file.parentFile ?: return@setPositiveButton
+                    val tempName = "temp_${System.currentTimeMillis()}_${item.name}"
+                    val tempFile = File(parent, tempName)
+
+                    if (item.file.renameTo(tempFile)) {
+                        val finalFile = File(parent, newName)
+                        if (tempFile.renameTo(finalFile)) {
+                            finalFile.setLastModified(System.currentTimeMillis())
+                            updateInMediaStore(item.path, finalFile.absolutePath)
+                            scanPath(finalFile.absolutePath)
+
+                            com.bumptech.glide.Glide.get(this).clearMemory()
+                            Thread {
+                                com.bumptech.glide.Glide.get(applicationContext).clearDiskCache()
+                            }.start()
+
+                            Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
+                            loadDirectory(currentPath)
+                            return@setPositiveButton
+                        } else {
+                            // Fallback: ripristina il nome originale
+                            tempFile.renameTo(item.file)
+                            Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
+                            return@setPositiveButton
+                        }
                     }
-                    if (item.file.renameTo(newFile)) {
-                        newFile.setLastModified(System.currentTimeMillis())
-                        updateInMediaStore(item.path, newFile.absolutePath)
-                        scanPath(newFile.absolutePath)
+                } catch (_: Exception) {}
+            }
 
-                        com.bumptech.glide.Glide.get(this).clearMemory()
-                        Thread {
-                            com.bumptech.glide.Glide.get(applicationContext).clearDiskCache()
-                        }.start()
+            // === CASO 2: rename normale ===
+            try {
+                val newFile = File(item.file.parentFile, newName)
+                if (item.file.renameTo(newFile)) {
+                    newFile.setLastModified(System.currentTimeMillis())
+                    updateInMediaStore(item.path, newFile.absolutePath)
+                    scanPath(newFile.absolutePath)
 
-                        Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
-                        loadDirectory(currentPath)
-                        return@setPositiveButton
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "renameTo error", e)
-                }
+                    com.bumptech.glide.Glide.get(this).clearMemory()
+                    Thread {
+                        com.bumptech.glide.Glide.get(applicationContext).clearDiskCache()
+                    }.start()
 
-                // 2) Fallback SAF solo se già configurato
-                val doc = getSafDocumentFile(item.path)
-                if (doc != null && doc.renameTo(newName)) {
-                    Toast.makeText(this, "Rinominato (SAF)", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
                     loadDirectory(currentPath)
                     return@setPositiveButton
                 }
+            } catch (_: Exception) {}
 
-                // 3) Se SAF mancante, chiedilo (una volta) e suggerisci di riprovare
-                if (!hasSafFor(item.path)) {
-                    requestSafForPath(item.path) {
-                        Toast.makeText(this, "Autorizza l'accesso per rinominare. Riprova.", Toast.LENGTH_LONG).show()
-                    }
-                } else {
+            val doc = getSafDocumentFile(item.path)
+            if (doc != null && doc.renameTo(newName)) {
+                Toast.makeText(this, "Rinominato (SAF)", Toast.LENGTH_SHORT).show()
+                loadDirectory(currentPath)
+                return@setPositiveButton
+            }
+
+            if (!hasSafFor(item.path)) {
+                requestSafForPath(item.path) {
                     Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
                 }
+            } else {
+                Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
             }
-            .setNegativeButton("Annulla", null).show()
-    }
+        }
+        .setNegativeButton("Annulla", null).show()
+}
 
     private fun updateInMediaStore(oldPath: String, newPath: String) {
         try {
