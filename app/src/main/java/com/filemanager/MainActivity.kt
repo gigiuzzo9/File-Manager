@@ -145,72 +145,75 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
+    super.onCreate(savedInstanceState)
+    setContentView(R.layout.activity_main)
 
-        prefs = getSharedPreferences("filemanager", MODE_PRIVATE)
-        showHidden = prefs.getBoolean("show_hidden", false)
-        isGrid = prefs.getBoolean("is_grid", false)
-        sortBy = prefs.getString("sort_by", "name") ?: "name"
+    prefs = getSharedPreferences("filemanager", MODE_PRIVATE)
+    showHidden = prefs.getBoolean("show_hidden", false)
+    isGrid = prefs.getBoolean("is_grid", false)
+    sortBy = prefs.getString("sort_by", "name") ?: "name"
 
-        currentPath = rootInternal
+    currentPath = rootInternal
 
-        loadSafTreeUris()
+    loadSafTreeUris()
 
-        recycler = findViewById(R.id.recyclerFiles)
-        txtPath = findViewById(R.id.txtPath)
-        txtSort = findViewById(R.id.txtSort)
-        editSearch = findViewById(R.id.editSearch)
-        storageRow = findViewById(R.id.storageRow)
-        searchBar = findViewById(R.id.searchBar)
-        selectionBar = findViewById(R.id.selectionBar)
-        categoriesRow = findViewById(R.id.categoriesRow)
-        actionsRow = findViewById(R.id.actionsRow)
-        txtSelectionCount = findViewById(R.id.txtSelectionCount)
-        btnSelPaste = findViewById(R.id.btnSelPaste)
-        btnSelMore = findViewById(R.id.btnSelMore)
-        btnPaste = findViewById(R.id.btnPaste)
-        btnViewToggle = findViewById(R.id.btnViewToggle)
+    recycler = findViewById(R.id.recyclerFiles)
+    txtPath = findViewById(R.id.txtPath)
+    txtSort = findViewById(R.id.txtSort)
+    editSearch = findViewById(R.id.editSearch)
+    storageRow = findViewById(R.id.storageRow)
+    searchBar = findViewById(R.id.searchBar)
+    selectionBar = findViewById(R.id.selectionBar)
+    categoriesRow = findViewById(R.id.categoriesRow)
+    actionsRow = findViewById(R.id.actionsRow)
+    txtSelectionCount = findViewById(R.id.txtSelectionCount)
+    btnSelPaste = findViewById(R.id.btnSelPaste)
+    btnSelMore = findViewById(R.id.btnSelMore)
+    btnPaste = findViewById(R.id.btnPaste)
+    btnViewToggle = findViewById(R.id.btnViewToggle)
 
-        editSearch.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) {
-                searchQuery = s?.toString()?.lowercase() ?: ""
-                applyFilters()
-            }
-        })
-
-        findViewById<ImageButton>(R.id.btnBack).setOnClickListener { goBack() }
-        findViewById<ImageButton>(R.id.btnAddFolder).setOnClickListener { createFolder() }
-        findViewById<LinearLayout>(R.id.btnSort).setOnClickListener { showSortDialog() }
-        btnViewToggle.setOnClickListener { toggleView() }
-        findViewById<ImageButton>(R.id.btnSettings).setOnClickListener { showSettingsDialog() }
-
-        btnPaste.setOnClickListener { pasteFromClipboard() }
-
-        findViewById<LinearLayout>(R.id.catImages).setOnClickListener { setCategory("images") }
-        findViewById<LinearLayout>(R.id.catAudio).setOnClickListener { setCategory("audio") }
-        findViewById<LinearLayout>(R.id.catVideo).setOnClickListener { setCategory("video") }
-        findViewById<LinearLayout>(R.id.catDocs).setOnClickListener { setCategory("documents") }
-
-        findViewById<ImageButton>(R.id.btnSelectionClose).setOnClickListener { exitSelectionMode() }
-        findViewById<LinearLayout>(R.id.btnSelCopy).setOnClickListener { copySelectedFiles("copy") }
-        findViewById<LinearLayout>(R.id.btnSelDelete).setOnClickListener { deleteSelectedFiles() }
-        btnSelPaste.setOnClickListener { pasteFromClipboard() }
-        btnSelMore.setOnClickListener { showSelectionMoreMenu() }
-
-        updateStorageCards()
-        updateSortLabel()
-        updateViewToggleIcon()
-        updatePasteButton()
-
-        if (hasStoragePermission()) {
-            loadDirectory(currentPath)
-        } else {
-            requestStoragePermission()
+    editSearch.addTextChangedListener(object : TextWatcher {
+        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+        override fun afterTextChanged(s: Editable?) {
+            searchQuery = s?.toString()?.lowercase() ?: ""
+            applyFilters()
         }
+    })
+
+    findViewById<ImageButton>(R.id.btnBack).setOnClickListener { goBack() }
+    findViewById<ImageButton>(R.id.btnAddFolder).setOnClickListener { createFolder() }
+    findViewById<LinearLayout>(R.id.btnSort).setOnClickListener { showSortDialog() }
+    btnViewToggle.setOnClickListener { toggleView() }
+    findViewById<ImageButton>(R.id.btnSettings).setOnClickListener { showSettingsDialog() }
+
+    btnPaste.setOnClickListener { pasteFromClipboard() }
+
+    findViewById<LinearLayout>(R.id.catImages).setOnClickListener { setCategory("images") }
+    findViewById<LinearLayout>(R.id.catAudio).setOnClickListener { setCategory("audio") }
+    findViewById<LinearLayout>(R.id.catVideo).setOnClickListener { setCategory("video") }
+    findViewById<LinearLayout>(R.id.catDocs).setOnClickListener { setCategory("documents") }
+
+    findViewById<ImageButton>(R.id.btnSelectionClose).setOnClickListener { exitSelectionMode() }
+    findViewById<LinearLayout>(R.id.btnSelCopy).setOnClickListener {
+        copySelectedFiles("copy")
+        exitSelectionMode()
     }
+    findViewById<LinearLayout>(R.id.btnSelDelete).setOnClickListener { deleteSelectedFiles() }
+    btnSelPaste.setOnClickListener { pasteFromClipboard() }
+    btnSelMore.setOnClickListener { showSelectionMoreMenu() }
+
+    updateStorageCards()
+    updateSortLabel()
+    updateViewToggleIcon()
+    updatePasteButton()
+
+    if (hasStoragePermission()) {
+        loadDirectory(currentPath)
+    } else {
+        requestStoragePermission()
+    }
+}
 
     override fun onResume() {
         super.onResume()
