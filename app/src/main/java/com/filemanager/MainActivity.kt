@@ -638,7 +638,7 @@ class MainActivity : AppCompatActivity() {
             val finalFailedPaths = failedPaths.toList()
 
             mainHandler.post {
-                clearSelection()
+                exitSelectionMode()
 
                 if (finalDeleted > 0) {
                     Toast.makeText(
@@ -765,7 +765,7 @@ class MainActivity : AppCompatActivity() {
                 .show()
             clipboardPaths.clear()
             clipboardAction = null
-            clearSelection()
+            exitSelectionMode()
             updatePasteButton()
             return
         }
@@ -786,7 +786,7 @@ class MainActivity : AppCompatActivity() {
         val finalAction = action ?: "copy"
         clipboardPaths.clear()
         clipboardAction = null
-        clearSelection()
+        exitSelectionMode()
         updatePasteButton()
 
         Toast.makeText(
@@ -1080,7 +1080,7 @@ class MainActivity : AppCompatActivity() {
         if (selectedPaths.isEmpty()) return
 
         val pathsToZip = selectedPaths.toList()
-        clearSelection()
+        exitSelectionMode()
 
         val firstPath = pathsToZip.first()
         val firstName = File(firstPath).name
@@ -1310,30 +1310,6 @@ class MainActivity : AppCompatActivity() {
                 val newName = input.text.toString().trim()
                 if (newName.isEmpty() || newName == item.name) return@setPositiveButton
 
-                // Caso case-only: esempio.png -> ESEMPIO.png
-                if (newName.equals(item.name, ignoreCase = true)) {
-                    if (renameCaseOnly(item.file, newName)) {
-                        val finalFile = File(item.file.parentFile, newName)
-                        finalFile.setLastModified(System.currentTimeMillis())
-                        updateInMediaStore(item.path, finalFile.absolutePath)
-                        scanPath(finalFile.absolutePath)
-
-                        com.bumptech.glide.Glide.get(this).clearMemory()
-                        Thread {
-                            com.bumptech.glide.Glide.get(applicationContext).clearDiskCache()
-                        }.start()
-
-                        Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
-                        clearSelection()
-                        loadDirectory(currentPath)
-                        return@setPositiveButton
-                    } else {
-                        Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
-                        return@setPositiveButton
-                    }
-                }
-
-                // Caso normale
                 try {
                     val newFile = File(item.file.parentFile, newName)
                     if (newFile.exists()) {
@@ -1351,7 +1327,6 @@ class MainActivity : AppCompatActivity() {
                         }.start()
 
                         Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
-                        clearSelection()
                         loadDirectory(currentPath)
                         return@setPositiveButton
                     }
@@ -1362,7 +1337,6 @@ class MainActivity : AppCompatActivity() {
                 val doc = getSafDocumentFile(item.path)
                 if (doc != null && doc.renameTo(newName)) {
                     Toast.makeText(this, "Rinominato (SAF)", Toast.LENGTH_SHORT).show()
-                    clearSelection()
                     loadDirectory(currentPath)
                     return@setPositiveButton
                 }
@@ -1376,35 +1350,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             .setNegativeButton("Annulla", null).show()
-    }
-
-    private fun renameCaseOnly(file: File, newName: String): Boolean {
-        val parent = file.parentFile ?: return false
-        val finalFile = File(parent, newName)
-
-        val tempName = "tmp_${System.currentTimeMillis()}_${file.name}"
-        val tempFile = File(parent, tempName)
-
-        if (!file.renameTo(tempFile) || !tempFile.exists()) {
-            Log.e(TAG, "renameCaseOnly step 1 failed")
-            return false
-        }
-
-        if (!tempFile.renameTo(finalFile)) {
-            Log.e(TAG, "renameCaseOnly step 2 failed")
-            tempFile.renameTo(file)
-            return false
-        }
-
-        val exists = parent.listFiles()?.any { it.name == newName } == true
-        if (!exists) {
-            Log.e(TAG, "renameCaseOnly step 3 failed")
-            if (finalFile.exists()) finalFile.renameTo(file)
-            return false
-        }
-
-        Log.d(TAG, "renameCaseOnly SUCCESS ${file.name} -> $newName")
-        return true
     }
 
     private fun updateInMediaStore(oldPath: String, newPath: String) {
@@ -1545,7 +1490,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 11 -> {
                     val item = getSingleSelectedItem()
-                    clearSelection()
+                    exitSelectionMode()
                     if (item != null) openFileWithPicker(item)
                 }
                 1 -> copySelectedFiles("cut")
@@ -1553,17 +1498,17 @@ class MainActivity : AppCompatActivity() {
                 3 -> comprimiZipSelezioneMultipla()
                 4 -> {
                     val item = getSingleSelectedItem()
-                    clearSelection()
+                    exitSelectionMode()
                     if (item != null) renameItem(item)
                 }
                 5 -> {
                     val item = getSingleSelectedItem()
-                    clearSelection()
+                    exitSelectionMode()
                     if (item != null) decomprimiZip(item)
                 }
                 6 -> {
                     val item = getSingleSelectedItem()
-                    clearSelection()
+                    exitSelectionMode()
                     if (item != null) showItemInfo(item)
                 }
             }
@@ -1581,7 +1526,7 @@ class MainActivity : AppCompatActivity() {
     private fun shareSelectedFiles() {
         if (selectedPaths.isEmpty()) return
         val paths = selectedPaths.toList()
-        clearSelection()
+        exitSelectionMode()
 
         if (paths.size == 1) {
             val path = paths.first()
