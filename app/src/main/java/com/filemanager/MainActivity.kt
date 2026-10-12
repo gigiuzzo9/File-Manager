@@ -541,10 +541,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun exitSelectionMode() {
-        selectionMode = false
-        selectedPaths.clear()
-        updateSelectionUI()
-        renderList()
+    selectionMode = false
+    selectedPaths.clear()
+    updateSelectionUI()
+    renderList()
+    updatePasteButton()
     }
 
     private fun toggleSelection(item: FileItem) {
