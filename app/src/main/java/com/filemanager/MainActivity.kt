@@ -1318,35 +1318,25 @@ class MainActivity : AppCompatActivity() {
 
             // === CASO 1: rename "case-only" (solo maiuscole/minuscole cambiate) ===
             if (newName.equals(item.name, ignoreCase = true)) {
-                // Giro a due passi: prima rinomina in un nome temporaneo unico
-                try {
-                    val parent = item.file.parentFile ?: return@setPositiveButton
-                    val tempName = "temp_${System.currentTimeMillis()}_${item.name}"
-                    val tempFile = File(parent, tempName)
+                val success = renameCaseOnly(item.file, newName)
+                if (success) {
+                    val finalFile = File(item.file.parentFile, newName)
+                    finalFile.setLastModified(System.currentTimeMillis())
+                    updateInMediaStore(item.path, finalFile.absolutePath)
+                    scanPath(finalFile.absolutePath)
 
-                    if (item.file.renameTo(tempFile)) {
-                        val finalFile = File(parent, newName)
-                        if (tempFile.renameTo(finalFile)) {
-                            finalFile.setLastModified(System.currentTimeMillis())
-                            updateInMediaStore(item.path, finalFile.absolutePath)
-                            scanPath(finalFile.absolutePath)
+                    com.bumptech.glide.Glide.get(this).clearMemory()
+                    Thread {
+                        com.bumptech.glide.Glide.get(applicationContext).clearDiskCache()
+                    }.start()
 
-                            com.bumptech.glide.Glide.get(this).clearMemory()
-                            Thread {
-                                com.bumptech.glide.Glide.get(applicationContext).clearDiskCache()
-                            }.start()
-
-                            Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
-                            loadDirectory(currentPath)
-                            return@setPositiveButton
-                        } else {
-                            // Fallback: ripristina il nome originale
-                            tempFile.renameTo(item.file)
-                            Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
-                            return@setPositiveButton
-                        }
-                    }
-                } catch (_: Exception) {}
+                    Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
+                    loadDirectory(currentPath)
+                    return@setPositiveButton
+                } else {
+                    Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
             }
 
             // === CASO 2: rename normale ===
@@ -1384,6 +1374,38 @@ class MainActivity : AppCompatActivity() {
             }
         }
         .setNegativeButton("Annulla", null).show()
+}
+
+/**
+ * Rinomina un file/folder cambiando SOLO maiuscole/minuscole.
+ * Usa Files.move() con REPLACE_EXISTING perché renameTo() non funziona
+ * quando il filesystem è case-insensitive (Android lo è).
+ */
+private fun renameCaseOnly(file: File, newName: String): Boolean {
+    return try {
+        val newFile = File(file.parentFile, newName)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // Files.move() con ATOMIC_MOVE gestisce correttamente il case-only rename
+            Files.move(
+                file.toPath(),
+                newFile.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING
+            )
+        } else {
+            // Fallback per Android < 8: giro a due passi
+            val tempName = "temp_${System.currentTimeMillis()}_${file.name}"
+            val tempFile = File(file.parentFile, tempName)
+            if (!file.renameTo(tempFile)) return false
+            if (!tempFile.renameTo(newFile)) {
+                tempFile.renameTo(file)
+                return false
+            }
+        }
+        true
+    } catch (e: Exception) {
+        Log.e(TAG, "renameCaseOnly error: ${file.absolutePath} -> $newName", e)
+        false
+    }
 }
 
     private fun updateInMediaStore(oldPath: String, newPath: String) {
