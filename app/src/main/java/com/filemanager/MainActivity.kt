@@ -104,6 +104,7 @@ class MainActivity : AppCompatActivity() {
 
     private var selectionMode: Boolean = false
     private val selectedPaths = mutableSetOf<String>()
+    private var lastCount: Int = 0
 
     private val safTreeUris = mutableMapOf<String, Uri>()
 
@@ -145,75 +146,72 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-    super.onCreate(savedInstanceState)
-    setContentView(R.layout.activity_main)
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
 
-    prefs = getSharedPreferences("filemanager", MODE_PRIVATE)
-    showHidden = prefs.getBoolean("show_hidden", false)
-    isGrid = prefs.getBoolean("is_grid", false)
-    sortBy = prefs.getString("sort_by", "name") ?: "name"
+        prefs = getSharedPreferences("filemanager", MODE_PRIVATE)
+        showHidden = prefs.getBoolean("show_hidden", false)
+        isGrid = prefs.getBoolean("is_grid", false)
+        sortBy = prefs.getString("sort_by", "name") ?: "name"
 
-    currentPath = rootInternal
+        currentPath = rootInternal
 
-    loadSafTreeUris()
+        loadSafTreeUris()
 
-    recycler = findViewById(R.id.recyclerFiles)
-    txtPath = findViewById(R.id.txtPath)
-    txtSort = findViewById(R.id.txtSort)
-    editSearch = findViewById(R.id.editSearch)
-    storageRow = findViewById(R.id.storageRow)
-    searchBar = findViewById(R.id.searchBar)
-    selectionBar = findViewById(R.id.selectionBar)
-    categoriesRow = findViewById(R.id.categoriesRow)
-    actionsRow = findViewById(R.id.actionsRow)
-    txtSelectionCount = findViewById(R.id.txtSelectionCount)
-    btnSelPaste = findViewById(R.id.btnSelPaste)
-    btnSelMore = findViewById(R.id.btnSelMore)
-    btnPaste = findViewById(R.id.btnPaste)
-    btnViewToggle = findViewById(R.id.btnViewToggle)
+        recycler = findViewById(R.id.recyclerFiles)
+        txtPath = findViewById(R.id.txtPath)
+        txtSort = findViewById(R.id.txtSort)
+        editSearch = findViewById(R.id.editSearch)
+        storageRow = findViewById(R.id.storageRow)
+        searchBar = findViewById(R.id.searchBar)
+        selectionBar = findViewById(R.id.selectionBar)
+        categoriesRow = findViewById(R.id.categoriesRow)
+        actionsRow = findViewById(R.id.actionsRow)
+        txtSelectionCount = findViewById(R.id.txtSelectionCount)
+        btnSelPaste = findViewById(R.id.btnSelPaste)
+        btnSelMore = findViewById(R.id.btnSelMore)
+        btnPaste = findViewById(R.id.btnPaste)
+        btnViewToggle = findViewById(R.id.btnViewToggle)
 
-    editSearch.addTextChangedListener(object : TextWatcher {
-        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-        override fun afterTextChanged(s: Editable?) {
-            searchQuery = s?.toString()?.lowercase() ?: ""
-            applyFilters()
+        editSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                searchQuery = s?.toString()?.lowercase() ?: ""
+                applyFilters()
+            }
+        })
+
+        findViewById<ImageButton>(R.id.btnBack).setOnClickListener { goBack() }
+        findViewById<ImageButton>(R.id.btnAddFolder).setOnClickListener { createFolder() }
+        findViewById<LinearLayout>(R.id.btnSort).setOnClickListener { showSortDialog() }
+        btnViewToggle.setOnClickListener { toggleView() }
+        findViewById<ImageButton>(R.id.btnSettings).setOnClickListener { showSettingsDialog() }
+
+        btnPaste.setOnClickListener { pasteFromClipboard() }
+
+        findViewById<LinearLayout>(R.id.catImages).setOnClickListener { setCategory("images") }
+        findViewById<LinearLayout>(R.id.catAudio).setOnClickListener { setCategory("audio") }
+        findViewById<LinearLayout>(R.id.catVideo).setOnClickListener { setCategory("video") }
+        findViewById<LinearLayout>(R.id.catDocs).setOnClickListener { setCategory("documents") }
+
+        findViewById<ImageButton>(R.id.btnSelectionClose).setOnClickListener { exitSelectionMode() }
+        findViewById<LinearLayout>(R.id.btnSelCopy).setOnClickListener { copySelectedFiles("copy") }
+        findViewById<LinearLayout>(R.id.btnSelDelete).setOnClickListener { deleteSelectedFiles() }
+        btnSelPaste.setOnClickListener { pasteFromClipboard() }
+        btnSelMore.setOnClickListener { showSelectionMoreMenu() }
+
+        updateStorageCards()
+        updateSortLabel()
+        updateViewToggleIcon()
+        updatePasteButton()
+
+        if (hasStoragePermission()) {
+            loadDirectory(currentPath)
+        } else {
+            requestStoragePermission()
         }
-    })
-
-    findViewById<ImageButton>(R.id.btnBack).setOnClickListener { goBack() }
-    findViewById<ImageButton>(R.id.btnAddFolder).setOnClickListener { createFolder() }
-    findViewById<LinearLayout>(R.id.btnSort).setOnClickListener { showSortDialog() }
-    btnViewToggle.setOnClickListener { toggleView() }
-    findViewById<ImageButton>(R.id.btnSettings).setOnClickListener { showSettingsDialog() }
-
-    btnPaste.setOnClickListener { pasteFromClipboard() }
-
-    findViewById<LinearLayout>(R.id.catImages).setOnClickListener { setCategory("images") }
-    findViewById<LinearLayout>(R.id.catAudio).setOnClickListener { setCategory("audio") }
-    findViewById<LinearLayout>(R.id.catVideo).setOnClickListener { setCategory("video") }
-    findViewById<LinearLayout>(R.id.catDocs).setOnClickListener { setCategory("documents") }
-
-    findViewById<ImageButton>(R.id.btnSelectionClose).setOnClickListener { exitSelectionMode() }
-    findViewById<LinearLayout>(R.id.btnSelCopy).setOnClickListener {
-        copySelectedFiles("copy")
-        exitSelectionMode()
     }
-    findViewById<LinearLayout>(R.id.btnSelDelete).setOnClickListener { deleteSelectedFiles() }
-    btnSelPaste.setOnClickListener { pasteFromClipboard() }
-    btnSelMore.setOnClickListener { showSelectionMoreMenu() }
-
-    updateStorageCards()
-    updateSortLabel()
-    updateViewToggleIcon()
-    updatePasteButton()
-
-    if (hasStoragePermission()) {
-        loadDirectory(currentPath)
-    } else {
-        requestStoragePermission()
-    }
-}
 
     override fun onResume() {
         super.onResume()
@@ -230,8 +228,6 @@ class MainActivity : AppCompatActivity() {
                 loadDirectory(currentPath)
             }
         }
-        // NON chiediamo più automaticamente il SAF all'avvio: la Gallery non lo fa.
-        // Le operazioni che richiedono SAF lo chiederanno al momento, solo se File API fallisce.
 
         updateStorageCards()
         updatePasteButton()
@@ -496,18 +492,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openDirectoryWithSafCheck(path: String) {
-        // Prova sempre ad aprire con File API.
         val dir = File(path)
         if (dir.exists() && dir.isDirectory && dir.canRead()) {
             loadDirectory(path)
             return
         }
-        // Fallback: se la cartella non è leggibile con File API, prova via SAF se già configurato.
         if (hasSafFor(path)) {
             loadDirectory(path)
             return
         }
-        // Altrimenti chiedi SAF (serve per poter leggere la cartella)
         requestSafForPath(path) {
             Toast.makeText(this, "Permesso necessario per accedere a questo volume", Toast.LENGTH_LONG).show()
             loadDirectory(rootInternal, resetCategory = true)
@@ -528,25 +521,33 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updatePasteButton() {
-    val shouldShow = !selectionMode && clipboardPaths.isNotEmpty()
-    Log.d(TAG, "updatePasteButton: shouldShow=$shouldShow selectionMode=$selectionMode clipSize=${clipboardPaths.size}")
-    btnPaste.visibility = if (shouldShow) View.VISIBLE else View.GONE
-}
+        val shouldShow = !selectionMode && clipboardPaths.isNotEmpty()
+        btnPaste.visibility = if (shouldShow) View.VISIBLE else View.GONE
+    }
 
     private fun enterSelectionMode(item: FileItem) {
         selectionMode = true
         selectedPaths.clear()
         selectedPaths.add(item.path)
+        lastCount = 1
         updateSelectionUI()
         renderList()
     }
 
     private fun exitSelectionMode() {
-    selectionMode = false
-    selectedPaths.clear()
-    updateSelectionUI()
-    renderList()
-    updatePasteButton()
+        selectionMode = false
+        selectedPaths.clear()
+        lastCount = 0
+        updateSelectionUI()
+        renderList()
+        updatePasteButton()
+    }
+
+    private fun clearSelection() {
+        lastCount = selectedPaths.size
+        selectedPaths.clear()
+        updateSelectionUI()
+        renderList()
     }
 
     private fun toggleSelection(item: FileItem) {
@@ -559,6 +560,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             selectedPaths.add(item.path)
         }
+        lastCount = selectedPaths.size
         updateSelectionUI()
         renderList()
     }
@@ -571,7 +573,7 @@ class MainActivity : AppCompatActivity() {
             storageRow.visibility = View.GONE
             actionsRow.visibility = View.GONE
 
-            val count = selectedPaths.size
+            val count = if (selectedPaths.isNotEmpty()) selectedPaths.size else lastCount
             txtSelectionCount.text = if (count == 1) "1 selezionato" else "$count selezionati"
 
             btnSelPaste.visibility = if (clipboardPaths.isNotEmpty()) View.VISIBLE else View.GONE
@@ -605,9 +607,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun performDelete(pathsToDelete: List<String>) {
-        // NON nascondiamo prima: aspettiamo l'esito reale.
-        // Aggiorneremo la lista dopo aver saputo quanti sono stati eliminati davvero.
-
         executor.execute {
             var deleted = 0
             var failed = 0
@@ -619,7 +618,6 @@ class MainActivity : AppCompatActivity() {
                     val f = File(path)
                     ok = if (f.isDirectory) deleteRecursivelyFast(f) else f.delete()
                     if (!ok) {
-                        // Fallback SAF solo se già configurato
                         ok = deleteViaSafTree(path)
                     }
                 } catch (e: Exception) {
@@ -640,7 +638,7 @@ class MainActivity : AppCompatActivity() {
             val finalFailedPaths = failedPaths.toList()
 
             mainHandler.post {
-                exitSelectionMode()
+                clearSelection()
 
                 if (finalDeleted > 0) {
                     Toast.makeText(
@@ -650,8 +648,6 @@ class MainActivity : AppCompatActivity() {
                     ).show()
                 }
 
-                // Se alcuni falliscono e non c'è SAF configurato per quei path,
-                // chiediamo UNA VOLTA il SAF e suggeriamo di riprovare.
                 if (finalFailed > 0) {
                     val firstMissing = finalFailedPaths.firstOrNull { !hasSafFor(it) }
                     if (firstMissing != null) {
@@ -672,7 +668,6 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                // Ricarica la cartella per riflettere lo stato reale
                 loadDirectory(currentPath)
             }
         }
@@ -734,15 +729,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun copySelectedFiles(action: String) {
         if (selectedPaths.isEmpty()) return
+        val n = selectedPaths.size
         clipboardPaths.clear()
         clipboardPaths.addAll(selectedPaths)
         clipboardAction = action
         Toast.makeText(
             this,
-            "${selectedPaths.size} file ${if (action == "cut") "tagliati" else "copiati"}",
+            "$n file ${if (action == "cut") "tagliati" else "copiati"}",
             Toast.LENGTH_SHORT
         ).show()
-        updateSelectionUI()
+        clearSelection()
     }
 
     // ============================================================
@@ -769,12 +765,11 @@ class MainActivity : AppCompatActivity() {
                 .show()
             clipboardPaths.clear()
             clipboardAction = null
-            exitSelectionMode()
+            clearSelection()
             updatePasteButton()
             return
         }
 
-        // Niente placeholder fantasma: aggiorneremo la lista al termine, come fa la Gallery.
         val pendingCopy = mutableListOf<Pair<String, File>>()
 
         for (srcPath in existingSrc) {
@@ -791,7 +786,7 @@ class MainActivity : AppCompatActivity() {
         val finalAction = action ?: "copy"
         clipboardPaths.clear()
         clipboardAction = null
-        exitSelectionMode()
+        clearSelection()
         updatePasteButton()
 
         Toast.makeText(
@@ -815,7 +810,6 @@ class MainActivity : AppCompatActivity() {
                     var ok = false
                     var renamed = false
 
-                    // 1) Se cut: prova rename diretto (stesso filesystem)
                     if (finalAction == "cut") {
                         try {
                             renamed = src.renameTo(dst)
@@ -823,7 +817,6 @@ class MainActivity : AppCompatActivity() {
                         } catch (_: Exception) {}
                     }
 
-                    // 2) Prova File API: copia vera
                     if (!ok) {
                         try {
                             if (src.isDirectory) {
@@ -837,7 +830,6 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
-                    // 3) Fallback SAF (solo se già configurato)
                     if (!ok) {
                         try {
                             ok = if (src.isDirectory) copyDirectoryViaSaf(src, dst) else copyFileViaSaf(src, dst)
@@ -849,7 +841,6 @@ class MainActivity : AppCompatActivity() {
                     if (ok) {
                         copied++
 
-                        // Se era cut e non abbiamo rinominato, elimina l'originale
                         if (finalAction == "cut" && !renamed &&
                             dst.absolutePath != src.absolutePath && src.exists()) {
                             try {
@@ -881,7 +872,6 @@ class MainActivity : AppCompatActivity() {
                         Toast.LENGTH_SHORT
                     ).show()
                 } else if (finalFailed > 0) {
-                    // Chiedi SAF una volta se mancante
                     val firstMissing = finalFailedSrc.firstOrNull { !hasSafFor(it) }
                     if (firstMissing != null) {
                         requestSafForPath(firstMissing) {
@@ -1090,6 +1080,8 @@ class MainActivity : AppCompatActivity() {
         if (selectedPaths.isEmpty()) return
 
         val pathsToZip = selectedPaths.toList()
+        clearSelection()
+
         val firstPath = pathsToZip.first()
         val firstName = File(firstPath).name
         val baseName = if (firstName.contains(".")) firstName.substringBeforeLast(".") else firstName
@@ -1108,7 +1100,6 @@ class MainActivity : AppCompatActivity() {
             var ok = false
             var errorMsg = ""
 
-            // 1) Prova File API per primo (come Gallery)
             try {
                 val zipFile = File(currentPath, finalZipName)
                 var addedCount = 0
@@ -1131,7 +1122,6 @@ class MainActivity : AppCompatActivity() {
                 try { File(currentPath, finalZipName).delete() } catch (_: Exception) {}
             }
 
-            // 2) Fallback SAF
             if (!ok) {
                 try {
                     ok = comprimiZipMultiViaSaf(pathsToZip, finalZipName)
@@ -1147,7 +1137,6 @@ class MainActivity : AppCompatActivity() {
             mainHandler.post {
                 if (ok) {
                     Toast.makeText(this, "Creato: $finalZipName", Toast.LENGTH_SHORT).show()
-                    exitSelectionMode()
                     loadDirectory(currentPath)
                 } else {
                     val missing = pathsToZip.firstOrNull { !hasSafFor(it) }
@@ -1312,119 +1301,111 @@ class MainActivity : AppCompatActivity() {
     // ============================================================
 
     private fun renameItem(item: FileItem) {
-    val input = EditText(this)
-    input.setText(item.name)
-    AlertDialog.Builder(this)
-        .setTitle("Rinomina")
-        .setView(input)
-        .setPositiveButton("OK") { _, _ ->
-            val newName = input.text.toString().trim()
-            if (newName.isEmpty() || newName == item.name) return@setPositiveButton
+        val input = EditText(this)
+        input.setText(item.name)
+        AlertDialog.Builder(this)
+            .setTitle("Rinomina")
+            .setView(input)
+            .setPositiveButton("OK") { _, _ ->
+                val newName = input.text.toString().trim()
+                if (newName.isEmpty() || newName == item.name) return@setPositiveButton
 
-            // === CASO 1: rename "case-only" (solo maiuscole/minuscole cambiate) ===
-            if (newName.equals(item.name, ignoreCase = true)) {
-                val success = renameCaseOnly(item.file, newName)
-                if (success) {
-                    val finalFile = File(item.file.parentFile, newName)
-                    finalFile.setLastModified(System.currentTimeMillis())
-                    updateInMediaStore(item.path, finalFile.absolutePath)
-                    scanPath(finalFile.absolutePath)
+                // Caso case-only: esempio.png -> ESEMPIO.png
+                if (newName.equals(item.name, ignoreCase = true)) {
+                    if (renameCaseOnly(item.file, newName)) {
+                        val finalFile = File(item.file.parentFile, newName)
+                        finalFile.setLastModified(System.currentTimeMillis())
+                        updateInMediaStore(item.path, finalFile.absolutePath)
+                        scanPath(finalFile.absolutePath)
 
-                    com.bumptech.glide.Glide.get(this).clearMemory()
-                    Thread {
-                        com.bumptech.glide.Glide.get(applicationContext).clearDiskCache()
-                    }.start()
+                        com.bumptech.glide.Glide.get(this).clearMemory()
+                        Thread {
+                            com.bumptech.glide.Glide.get(applicationContext).clearDiskCache()
+                        }.start()
 
-                    Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
+                        clearSelection()
+                        loadDirectory(currentPath)
+                        return@setPositiveButton
+                    } else {
+                        Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
+                        return@setPositiveButton
+                    }
+                }
+
+                // Caso normale
+                try {
+                    val newFile = File(item.file.parentFile, newName)
+                    if (newFile.exists()) {
+                        Toast.makeText(this, "Esiste già un file con questo nome", Toast.LENGTH_SHORT).show()
+                        return@setPositiveButton
+                    }
+                    if (item.file.renameTo(newFile)) {
+                        newFile.setLastModified(System.currentTimeMillis())
+                        updateInMediaStore(item.path, newFile.absolutePath)
+                        scanPath(newFile.absolutePath)
+
+                        com.bumptech.glide.Glide.get(this).clearMemory()
+                        Thread {
+                            com.bumptech.glide.Glide.get(applicationContext).clearDiskCache()
+                        }.start()
+
+                        Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
+                        clearSelection()
+                        loadDirectory(currentPath)
+                        return@setPositiveButton
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "renameTo error", e)
+                }
+
+                val doc = getSafDocumentFile(item.path)
+                if (doc != null && doc.renameTo(newName)) {
+                    Toast.makeText(this, "Rinominato (SAF)", Toast.LENGTH_SHORT).show()
+                    clearSelection()
                     loadDirectory(currentPath)
                     return@setPositiveButton
+                }
+
+                if (!hasSafFor(item.path)) {
+                    requestSafForPath(item.path) {
+                        Toast.makeText(this, "Autorizza l'accesso per rinominare. Riprova.", Toast.LENGTH_LONG).show()
+                    }
                 } else {
                     Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
                 }
             }
+            .setNegativeButton("Annulla", null).show()
+    }
 
-            // === CASO 2: rename normale ===
-            try {
-                val newFile = File(item.file.parentFile, newName)
-                if (item.file.renameTo(newFile)) {
-                    newFile.setLastModified(System.currentTimeMillis())
-                    updateInMediaStore(item.path, newFile.absolutePath)
-                    scanPath(newFile.absolutePath)
+    private fun renameCaseOnly(file: File, newName: String): Boolean {
+        val parent = file.parentFile ?: return false
+        val finalFile = File(parent, newName)
 
-                    com.bumptech.glide.Glide.get(this).clearMemory()
-                    Thread {
-                        com.bumptech.glide.Glide.get(applicationContext).clearDiskCache()
-                    }.start()
+        val tempName = "tmp_${System.currentTimeMillis()}_${file.name}"
+        val tempFile = File(parent, tempName)
 
-                    Toast.makeText(this, "Rinominato", Toast.LENGTH_SHORT).show()
-                    loadDirectory(currentPath)
-                    return@setPositiveButton
-                }
-            } catch (_: Exception) {}
-
-            val doc = getSafDocumentFile(item.path)
-            if (doc != null && doc.renameTo(newName)) {
-                Toast.makeText(this, "Rinominato (SAF)", Toast.LENGTH_SHORT).show()
-                loadDirectory(currentPath)
-                return@setPositiveButton
-            }
-
-            if (!hasSafFor(item.path)) {
-                requestSafForPath(item.path) {
-                    Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
-                }
-            } else {
-                Toast.makeText(this, "Impossibile rinominare", Toast.LENGTH_SHORT).show()
-            }
+        if (!file.renameTo(tempFile) || !tempFile.exists()) {
+            Log.e(TAG, "renameCaseOnly step 1 failed")
+            return false
         }
-        .setNegativeButton("Annulla", null).show()
-}
 
-/**
- * Rinomina un file/folder cambiando SOLO maiuscole/minuscole.
- * Usa Files.move() con REPLACE_EXISTING perché renameTo() non funziona
- * quando il filesystem è case-insensitive (Android lo è).
- */
-private fun renameCaseOnly(file: File, newName: String): Boolean {
-    val parent = file.parentFile ?: return false
-    val finalFile = File(parent, newName)
-
-    // Passo 1: rename in nome temporaneo unico
-    val tempName = "tmp_${System.currentTimeMillis()}_${file.name}"
-    val tempFile = File(parent, tempName)
-
-    if (!file.renameTo(tempFile)) {
-        Log.e(TAG, "renameCaseOnly: step 1 (renameTo temp) failed")
-        return false
-    }
-    if (!tempFile.exists()) {
-        Log.e(TAG, "renameCaseOnly: step 1 verified FAILED (tempFile doesn't exist)")
-        return false
-    }
-
-    // Passo 2: rename dal temporaneo al nome finale
-    if (!tempFile.renameTo(finalFile)) {
-        Log.e(TAG, "renameCaseOnly: step 2 (renameTo final) failed")
-        tempFile.renameTo(file)
-        return false
-    }
-
-    // Passo 3: verifica che esista un file con il nome ESATTO (case-sensitive)
-    val filesInDir = parent.listFiles()
-    val exists = filesInDir?.any { it.name == newName } == true
-
-    if (!exists) {
-        Log.e(TAG, "renameCaseOnly: step 3 verified FAILED - no file named $newName")
-        if (finalFile.exists()) {
-            finalFile.renameTo(file)
+        if (!tempFile.renameTo(finalFile)) {
+            Log.e(TAG, "renameCaseOnly step 2 failed")
+            tempFile.renameTo(file)
+            return false
         }
-        return false
-    }
 
-    Log.d(TAG, "renameCaseOnly: SUCCESS ${file.name} -> $newName")
-    return true
-}
+        val exists = parent.listFiles()?.any { it.name == newName } == true
+        if (!exists) {
+            Log.e(TAG, "renameCaseOnly step 3 failed")
+            if (finalFile.exists()) finalFile.renameTo(file)
+            return false
+        }
+
+        Log.d(TAG, "renameCaseOnly SUCCESS ${file.name} -> $newName")
+        return true
+    }
 
     private fun updateInMediaStore(oldPath: String, newPath: String) {
         try {
@@ -1480,7 +1461,6 @@ private fun renameCaseOnly(file: File, newName: String): Boolean {
                 val name = input.text.toString().trim()
                 if (name.isEmpty()) return@setPositiveButton
 
-                // 1) File API
                 try {
                     val newDir = File(currentPath, name)
                     if (newDir.mkdir()) {
@@ -1491,7 +1471,6 @@ private fun renameCaseOnly(file: File, newName: String): Boolean {
                     }
                 } catch (_: Exception) {}
 
-                // 2) SAF se già configurato
                 val parent = getSafDocumentFile(currentPath)
                 if (parent != null && parent.createDirectory(name) != null) {
                     Toast.makeText(this, "Cartella creata (SAF)", Toast.LENGTH_SHORT).show()
@@ -1499,7 +1478,6 @@ private fun renameCaseOnly(file: File, newName: String): Boolean {
                     return@setPositiveButton
                 }
 
-                // 3) Altrimenti chiedi SAF
                 if (!hasSafFor(currentPath)) {
                     requestSafForPath(currentPath) {
                         Toast.makeText(this, "Autorizza l'accesso per creare. Riprova.", Toast.LENGTH_LONG).show()
@@ -1516,104 +1494,84 @@ private fun renameCaseOnly(file: File, newName: String): Boolean {
     // ============================================================
 
     private fun showSelectionMoreMenu() {
-    if (selectedPaths.isEmpty()) return
+        if (selectedPaths.isEmpty()) return
 
-    val popup = PopupMenu(this, btnSelMore)
-    val count = selectedPaths.size
+        val popup = PopupMenu(this, btnSelMore)
+        val count = selectedPaths.size
 
-    val allVisibleSelected = displayedItems.isNotEmpty() &&
-            displayedItems.all { selectedPaths.contains(it.path) }
+        val allVisibleSelected = displayedItems.isNotEmpty() &&
+                displayedItems.all { selectedPaths.contains(it.path) }
 
-    if (allVisibleSelected) {
-        popup.menu.add(0, 20, 0, "Deseleziona tutto")
-    } else {
-        popup.menu.add(0, 20, 0, "Seleziona tutto")
-    }
-
-    if (count == 1) {
-        val item = getSingleSelectedItem()
-        if (item != null && !item.isDirectory) {
-            popup.menu.add(0, 11, 2, "Apri con...")
+        if (allVisibleSelected) {
+            popup.menu.add(0, 20, 0, "Deseleziona tutto")
+        } else {
+            popup.menu.add(0, 20, 0, "Seleziona tutto")
         }
-    }
 
-    popup.menu.add(0, 1, 3, "Taglia")
-    popup.menu.add(0, 2, 4, "Condividi")
-    popup.menu.add(0, 3, 5, "Comprimi in ZIP")
-
-    if (count == 1) {
-        val path = selectedPaths.first()
-        val item = allItems.find { it.path == path }
-        if (item != null) {
-            popup.menu.add(0, 4, 6, "Rinomina")
-            if (!item.isDirectory && item.name.lowercase().endsWith(".zip")) {
-                popup.menu.add(0, 5, 7, "Decomprimi")
-            }
-            popup.menu.add(0, 6, 8, "Proprietà")
-        }
-    }
-
-    popup.setOnMenuItemClickListener { menuItem ->
-        when (menuItem.itemId) {
-            20 -> {
-                if (allVisibleSelected) selectedPaths.clear()
-                else {
-                    selectedPaths.clear()
-                    for (item in displayedItems) selectedPaths.add(item.path)
-                }
-                updateSelectionUI()
-                renderList()
-            }
-            10 -> {
-                val item = getSingleSelectedItem()
-                if (item != null) {
-                    exitSelectionMode()
-                    openFileWithPicker(item)
-                } else {
-                    exitSelectionMode()
-                }
-            }
-            11 -> {
-                val item = getSingleSelectedItem()
-                if (item != null) {
-                    exitSelectionMode()
-                    openFileWithPicker(item)
-                } else {
-                    exitSelectionMode()
-                }
-            }
-            1 -> {
-                copySelectedFiles("cut")
-                exitSelectionMode()
-            }
-            2 -> {
-                shareSelectedFiles()
-                exitSelectionMode()
-            }
-            3 -> {
-                comprimiZipSelezioneMultipla()
-                exitSelectionMode()
-            }
-            4 -> {
-                val item = getSingleSelectedItem()
-                exitSelectionMode()
-                if (item != null) renameItem(item)
-            }
-            5 -> {
-                val item = getSingleSelectedItem()
-                exitSelectionMode()
-                if (item != null) decomprimiZip(item)
-            }
-            6 -> {
-                val item = getSingleSelectedItem()
-                exitSelectionMode()
-                if (item != null) showItemInfo(item)
+        if (count == 1) {
+            val item = getSingleSelectedItem()
+            if (item != null && !item.isDirectory) {
+                popup.menu.add(0, 11, 2, "Apri con...")
             }
         }
-        true
+
+        popup.menu.add(0, 1, 3, "Taglia")
+        popup.menu.add(0, 2, 4, "Condividi")
+        popup.menu.add(0, 3, 5, "Comprimi in ZIP")
+
+        if (count == 1) {
+            val path = selectedPaths.first()
+            val item = allItems.find { it.path == path }
+            if (item != null) {
+                popup.menu.add(0, 4, 6, "Rinomina")
+                if (!item.isDirectory && item.name.lowercase().endsWith(".zip")) {
+                    popup.menu.add(0, 5, 7, "Decomprimi")
+                }
+                popup.menu.add(0, 6, 8, "Proprietà")
+            }
+        }
+
+        popup.setOnMenuItemClickListener { menuItem ->
+            when (menuItem.itemId) {
+                20 -> {
+                    if (allVisibleSelected) selectedPaths.clear()
+                    else {
+                        selectedPaths.clear()
+                        for (item in displayedItems) selectedPaths.add(item.path)
+                    }
+                    lastCount = selectedPaths.size
+                    updateSelectionUI()
+                    renderList()
+                }
+                11 -> {
+                    val item = getSingleSelectedItem()
+                    clearSelection()
+                    if (item != null) openFileWithPicker(item)
+                }
+                1 -> copySelectedFiles("cut")
+                2 -> shareSelectedFiles()
+                3 -> comprimiZipSelezioneMultipla()
+                4 -> {
+                    val item = getSingleSelectedItem()
+                    clearSelection()
+                    if (item != null) renameItem(item)
+                }
+                5 -> {
+                    val item = getSingleSelectedItem()
+                    clearSelection()
+                    if (item != null) decomprimiZip(item)
+                }
+                6 -> {
+                    val item = getSingleSelectedItem()
+                    clearSelection()
+                    if (item != null) showItemInfo(item)
+                }
+            }
+            true
+        }
+        popup.show()
     }
-    popup.show()
-}
+
     private fun getSingleSelectedItem(): FileItem? {
         if (selectedPaths.size != 1) return null
         val path = selectedPaths.first()
@@ -1622,13 +1580,15 @@ private fun renameCaseOnly(file: File, newName: String): Boolean {
 
     private fun shareSelectedFiles() {
         if (selectedPaths.isEmpty()) return
-        if (selectedPaths.size == 1) {
-            val path = selectedPaths.first()
+        val paths = selectedPaths.toList()
+        clearSelection()
+
+        if (paths.size == 1) {
+            val path = paths.first()
             val item = displayedItems.find { it.path == path }
                 ?: allItems.find { it.path == path }
             if (item != null && !item.isDirectory) {
                 shareFile(item)
-                exitSelectionMode()
             } else if (item != null && item.isDirectory) {
                 Toast.makeText(this, "Impossibile condividere una cartella", Toast.LENGTH_SHORT).show()
             }
@@ -1637,7 +1597,7 @@ private fun renameCaseOnly(file: File, newName: String): Boolean {
 
         try {
             val uris = ArrayList<Uri>()
-            for (path in selectedPaths) {
+            for (path in paths) {
                 val f = File(path)
                 if (f.exists() && f.isFile) {
                     val uri = FileProvider.getUriForFile(this, "$packageName.provider", f)
@@ -1656,7 +1616,6 @@ private fun renameCaseOnly(file: File, newName: String): Boolean {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             startActivity(Intent.createChooser(intent, "Condividi con..."))
-            exitSelectionMode()
         } catch (e: Exception) {
             Toast.makeText(this, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
         }
@@ -1776,6 +1735,7 @@ private fun renameCaseOnly(file: File, newName: String): Boolean {
             activeCategory = null
             searchQuery = ""
             editSearch.setText("")
+            if (selectionMode) exitSelectionMode()
             if (vol.path.isEmpty()) {
                 requestSafForPath(rootInternal)
             } else if (vol.path == rootInternal) {
@@ -1973,30 +1933,28 @@ private fun renameCaseOnly(file: File, newName: String): Boolean {
     }
 
     private fun searchRecursive(dir: File, query: String, out: MutableList<FileItem>, depth: Int) {
-    if (depth > 12) return
-    val dirName = dir.name
-    if (dirName == ".trash" || dirName == ".thumbnails") return
+        if (depth > 8) return
+        val dirName = dir.name
+        if (dirName == "Android" || dirName == ".trash" || dirName == ".thumbnails") return
 
-    val path = dir.absolutePath
-    if (path.contains("/Android/data/") || path.contains("/Android/obb/")) return
-
-    val files = dir.listFiles() ?: return
-    for (f in files) {
-        val name = f.name
-        if (!showHidden && name.startsWith(".")) continue
-        if (name.lowercase().contains(query)) {
-            val parentRelPath = try {
-                dir.absolutePath.removePrefix(rootInternal).trimStart('/')
-            } catch (_: Exception) { "" }
-            val displayPath = if (parentRelPath.isEmpty()) "Memoria interna" else parentRelPath
-            out.add(
-                FileItem(f, name, f.absolutePath, f.isDirectory,
-                    if (f.isFile) f.length() else 0L, f.lastModified(), 0, displayPath)
-            )
+        val files = dir.listFiles() ?: return
+        for (f in files) {
+            val name = f.name
+            if (!showHidden && name.startsWith(".")) continue
+            if (name.lowercase().contains(query)) {
+                val parentRelPath = try {
+                    dir.absolutePath.removePrefix(rootInternal).trimStart('/')
+                } catch (_: Exception) { "" }
+                val displayPath = if (parentRelPath.isEmpty()) "Memoria interna" else parentRelPath
+                out.add(
+                    FileItem(f, name, f.absolutePath, f.isDirectory,
+                        if (f.isFile) f.length() else 0L, f.lastModified(), 0, displayPath)
+                )
+            }
+            if (f.isDirectory) searchRecursive(f, query, out, depth + 1)
         }
-        if (f.isDirectory) searchRecursive(f, query, out, depth + 1)
     }
-}
+
     private fun categoryFor(name: String): String {
         val l = name.lowercase()
         return when {
@@ -2022,6 +1980,8 @@ private fun renameCaseOnly(file: File, newName: String): Boolean {
             return
         }
 
+        if (selectionMode) exitSelectionMode()
+
         activeCategory = cat
         txtPath.text = "Filtro: $cat"
         Toast.makeText(this, "Ricerca in corso...", Toast.LENGTH_SHORT).show()
@@ -2039,30 +1999,27 @@ private fun renameCaseOnly(file: File, newName: String): Boolean {
     }
 
     private fun scanRecursive(dir: File, out: MutableList<FileItem>, cat: String, depth: Int) {
-    if (depth > 12) return
-    val dirName = dir.name
-    if (dirName == ".trash" || dirName == ".thumbnails") return
+        if (depth > 8) return
+        val dirName = dir.name
+        if (dirName == "Android" || dirName == ".trash" || dirName == ".thumbnails") return
 
-    val path = dir.absolutePath
-    if (path.contains("/Android/data/") || path.contains("/Android/obb/")) return
-
-    val files = dir.listFiles() ?: return
-    for (f in files) {
-        val name = f.name
-        if (!showHidden && name.startsWith(".")) continue
-        if (f.isDirectory) scanRecursive(f, out, cat, depth + 1)
-        else {
-            val match = if (cat == "documents") isDocumentFile(name) else categoryFor(name) == cat
-            if (match) {
-                val parentRelPath = try {
-                    dir.absolutePath.removePrefix(rootInternal).trimStart('/')
-                } catch (_: Exception) { "" }
-                val searchParentPath = if (parentRelPath.isEmpty()) "Memoria interna" else parentRelPath
-                out.add(FileItem(f, name, f.absolutePath, false, f.length(), f.lastModified(), 0, searchParentPath))
+        val files = dir.listFiles() ?: return
+        for (f in files) {
+            val name = f.name
+            if (!showHidden && name.startsWith(".")) continue
+            if (f.isDirectory) scanRecursive(f, out, cat, depth + 1)
+            else {
+                val match = if (cat == "documents") isDocumentFile(name) else categoryFor(name) == cat
+                if (match) {
+                    val parentRelPath = try {
+                        dir.absolutePath.removePrefix(rootInternal).trimStart('/')
+                    } catch (_: Exception) { "" }
+                    val searchParentPath = if (parentRelPath.isEmpty()) "Memoria interna" else parentRelPath
+                    out.add(FileItem(f, name, f.absolutePath, false, f.length(), f.lastModified(), 0, searchParentPath))
+                }
             }
         }
     }
-}
 
     private fun renderList() {
         val firstVisible = try {
