@@ -119,7 +119,8 @@ class FileAdapter(
     private fun iconForExtension(ext: String): Int {
         return when (ext) {
             "pdf" -> R.drawable.pdf
-            "doc", "docx", "odt", "rtf", "txt" -> R.drawable.doc
+            "doc", "docx", "odt", "rtf" -> R.drawable.doc
+            "txt" -> R.drawable.documents
             "xls", "xlsx", "ods", "csv" -> R.drawable.xls
             "ppt", "pptx", "odp" -> R.drawable.ppt
             "apk" -> R.drawable.apk
