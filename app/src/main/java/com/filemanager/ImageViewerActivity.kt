@@ -8,6 +8,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import com.bumptech.glide.Glide
+import com.bumptech.glide.signature.ObjectKey
 import com.github.chrisbanes.photoview.PhotoView
 import java.io.File
 
@@ -58,6 +59,7 @@ class ImageViewerActivity : AppCompatActivity() {
             if (file.exists()) {
                 Glide.with(holder.photoView.context)
                     .load(file)
+                    .signature(ObjectKey("${file.absolutePath}_${file.lastModified()}_${file.length()}"))
                     .into(holder.photoView)
             } else {
                 holder.photoView.setImageResource(android.R.drawable.ic_menu_report_image)
