@@ -9,6 +9,7 @@ import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.engine.DiskCacheStrategy
+import com.bumptech.glide.signature.ObjectKey
 import java.io.File
 
 class FileAdapter(
@@ -70,8 +71,10 @@ class FileAdapter(
                     val ext = item.name.substringAfterLast('.', "").lowercase()
 
                     if (mime.startsWith("image/")) {
+                        val file = File(item.path)
                         Glide.with(iconView.context)
-                            .load(File(item.path))
+                            .load(file)
+                            .signature(ObjectKey("${file.absolutePath}_${file.lastModified()}_${file.length()}"))
                             .skipMemoryCache(true)
                             .diskCacheStrategy(DiskCacheStrategy.NONE)
                             .centerCrop()
@@ -79,8 +82,10 @@ class FileAdapter(
                             .error(R.drawable.images)
                             .into(iconView)
                     } else if (mime.startsWith("video/")) {
+                        val file = File(item.path)
                         Glide.with(iconView.context)
-                            .load(File(item.path))
+                            .load(file)
+                            .signature(ObjectKey("${file.absolutePath}_${file.lastModified()}_${file.length()}"))
                             .skipMemoryCache(true)
                             .diskCacheStrategy(DiskCacheStrategy.NONE)
                             .centerCrop()
