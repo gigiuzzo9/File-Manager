@@ -526,14 +526,14 @@ class MainActivity : AppCompatActivity() {
         btnPaste.visibility = if (shouldShow) View.VISIBLE else View.GONE
     }
 
-    private fun enterSelectionMode(item: FileItem) {
+   private fun enterSelectionMode(item: FileItem) {
     captureAnchor(item)
     selectionMode = true
     selectedPaths.clear()
     selectedPaths.add(item.path)
     lastCount = 1
     updateSelectionUI()
-    renderList()
+    updateSelectionColors()
     restoreAnchor()
 }
 
@@ -542,7 +542,7 @@ private fun exitSelectionMode() {
     selectedPaths.clear()
     lastCount = 0
     updateSelectionUI()
-    renderList()
+    updateSelectionColors()
     updatePasteButton()
 }
 
@@ -550,7 +550,7 @@ private fun clearSelection() {
     lastCount = selectedPaths.size
     selectedPaths.clear()
     updateSelectionUI()
-    renderList()
+    updateSelectionColors()
 }
 
 private fun toggleSelection(item: FileItem) {
@@ -566,7 +566,7 @@ private fun toggleSelection(item: FileItem) {
     }
     lastCount = selectedPaths.size
     updateSelectionUI()
-    renderList()
+    updateSelectionColors()
     restoreAnchor()
 }
 
@@ -593,6 +593,26 @@ private fun toggleSelection(item: FileItem) {
         }
     }
       
+private fun updateSelectionColors() {
+    val adapter = recycler.adapter as? FileAdapter ?: return
+    val lm = recycler.layoutManager ?: return
+    val first = when (lm) {
+        is GridLayoutManager -> lm.findFirstVisibleItemPosition()
+        is LinearLayoutManager -> lm.findFirstVisibleItemPosition()
+        else -> 0
+    }
+    val last = when (lm) {
+        is GridLayoutManager -> lm.findLastVisibleItemPosition()
+        is LinearLayoutManager -> lm.findLastVisibleItemPosition()
+        else -> displayedItems.size - 1
+    }
+    if (first < 0) return
+    for (pos in first..last) {
+        val item = displayedItems.getOrNull(pos) ?: continue
+        val view = lm.findViewByPosition(pos) ?: continue
+        adapter.applySelectionToView(view, item.path)
+    } 
+} 
 
     private fun captureAnchor(item: FileItem) {
     val lm = recycler.layoutManager ?: return
