@@ -21,10 +21,6 @@ class FileAdapter(
     private val onLongClick: (FileItem) -> Unit
 ) : RecyclerView.Adapter<FileAdapter.VH>() {
 
-    companion object {
-        private const val PAYLOAD_SELECTION = "selection"
-    }
-
     class VH(view: View) : RecyclerView.ViewHolder(view) {
         val icon: ImageView? = view.findViewById(R.id.itemIcon)
         val name: TextView = view.findViewById(R.id.itemName)
@@ -41,17 +37,6 @@ class FileAdapter(
         selectedPaths = newSelectedPaths
         notifyDataSetChanged()
     }
-
-    fun updateSelection(newSelectionMode: Boolean, newSelectedPaths: Set<String>) {
-        val modeChanged = selectionMode != newSelectionMode
-        val selectionChanged = selectedPaths != newSelectedPaths
-        if (!modeChanged && !selectionChanged) return
-        selectionMode = newSelectionMode
-        selectedPaths = newSelectedPaths
-        notifyItemRangeChanged(0, itemCount, PAYLOAD_SELECTION)
-    }
-
-    fun itemAt(position: Int): FileItem? = items.getOrNull(position)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
         val layoutId = if (isGrid) R.layout.item_file_grid else R.layout.item_file
@@ -129,18 +114,6 @@ class FileAdapter(
             onLongClick(item)
             true
         }
-    }
-
-    override fun onBindViewHolder(holder: VH, position: Int, payloads: MutableList<Any>) {
-        if (payloads.contains(PAYLOAD_SELECTION)) {
-            val item = items[position]
-            val isSelected = selectionMode && selectedPaths.contains(item.path)
-            holder.itemView.setBackgroundColor(
-                if (isSelected) Color.parseColor("#333B82F6") else Color.TRANSPARENT
-            )
-            return
-        }
-        super.onBindViewHolder(holder, position, payloads)
     }
 
     override fun getItemCount() = items.size
