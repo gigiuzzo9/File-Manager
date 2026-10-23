@@ -603,15 +603,13 @@ private fun toggleSelection(item: FileItem) {
 }
 
    private fun restoreAnchor() {
-    recycler.post {
-        val lm = recycler.layoutManager ?: return@post
-        if (anchorPosition < 0) return@post
-        when (lm) {
-            is GridLayoutManager -> lm.scrollToPositionWithOffset(anchorPosition, anchorOffset)
-            is LinearLayoutManager -> lm.scrollToPositionWithOffset(anchorPosition, anchorOffset)
-        }
+    val lm = recycler.layoutManager ?: return
+    if (anchorPosition < 0) return
+    when (lm) {
+        is GridLayoutManager -> lm.scrollToPositionWithOffset(anchorPosition, anchorOffset)
+        is LinearLayoutManager -> lm.scrollToPositionWithOffset(anchorPosition, anchorOffset)
     }
-} 
+}
     // ============================================================
     // ELIMINA
     // ============================================================
@@ -2017,16 +2015,8 @@ private fun toggleSelection(item: FileItem) {
                 if (selectionMode) toggleSelection(item) else enterSelectionMode(item)
             }
         )
-        return
-    }
-
-    val listChanged = currentAdapter.itemCount != displayedItems.size ||
-        displayedItems.indices.any { currentAdapter.itemAt(it)?.path != displayedItems[it].path }
-
-    if (listChanged) {
-        currentAdapter.updateItems(displayedItems, selectionMode, selectedPaths)
     } else {
-        currentAdapter.updateSelection(selectionMode, selectedPaths)
+        currentAdapter.updateItems(displayedItems, selectionMode, selectedPaths)
     }
 }
 
