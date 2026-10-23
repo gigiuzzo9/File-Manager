@@ -38,6 +38,11 @@ class FileAdapter(
         notifyDataSetChanged()
     }
 
+    fun syncSelection(newSelectionMode: Boolean, newSelectedPaths: Set<String>) {
+        selectionMode = newSelectionMode
+        selectedPaths = newSelectedPaths
+    }
+
     fun applySelectionToView(itemView: View, path: String) {
         val isSelected = selectionMode && selectedPaths.contains(path)
         itemView.setBackgroundColor(
