@@ -1991,25 +1991,44 @@ private fun toggleSelection(item: FileItem) {
     }
 
     private fun renderList() {
-    recycler.layoutManager = if (isGrid) GridLayoutManager(this, 4) else LinearLayoutManager(this)
+    val newLayoutManager = if (isGrid) GridLayoutManager(this, 4) else LinearLayoutManager(this)
+    val layoutChanged = recycler.layoutManager?.javaClass != newLayoutManager.javaClass
 
-    recycler.adapter = FileAdapter(
-        items = displayedItems,
-        isGrid = isGrid,
-        selectionMode = selectionMode,
-        selectedPaths = selectedPaths,
-        onClick = { item ->
-            if (selectionMode) toggleSelection(item)
-            else {
-                if (item.isDirectory) {
-                    openDirectoryWithSafCheck(item.path)
-                } else openFileWithDefault(item)
+    if (layoutChanged) {
+        recycler.layoutManager = newLayoutManager
+    }
+
+    val currentAdapter = recycler.adapter as? FileAdapter
+    if (currentAdapter == null || layoutChanged) {
+        recycler.adapter = FileAdapter(
+            items = displayedItems,
+            isGrid = isGrid,
+            selectionMode = selectionMode,
+            selectedPaths = selectedPaths,
+            onClick = { item ->
+                if (selectionMode) toggleSelection(item)
+                else {
+                    if (item.isDirectory) {
+                        openDirectoryWithSafCheck(item.path)
+                    } else openFileWithDefault(item)
+                }
+            },
+            onLongClick = { item ->
+                if (selectionMode) toggleSelection(item) else enterSelectionMode(item)
             }
-        },
-        onLongClick = { item ->
-            if (selectionMode) toggleSelection(item) else enterSelectionMode(item)
-        }
-    )
+        )
+        return
+    }
+
+    // Se la lista è cambiata, aggiorna gli item; altrimenti aggiorna solo la selezione
+    val listChanged = currentAdapter.itemCount != displayedItems.size ||
+        displayedItems.indices.any { currentAdapter.itemAt(it)?.path != displayedItems[it].path }
+
+    if (listChanged) {
+        currentAdapter.updateItems(displayedItems, selectionMode)
+    } else {
+        currentAdapter.updateSelection(selectionMode)
+    }
 }
 
     private fun getCategoryKey(mimeType: String, fileName: String): String {
