@@ -2020,14 +2020,13 @@ private fun toggleSelection(item: FileItem) {
         return
     }
 
-    // Se la lista è cambiata, aggiorna gli item; altrimenti aggiorna solo la selezione
     val listChanged = currentAdapter.itemCount != displayedItems.size ||
         displayedItems.indices.any { currentAdapter.itemAt(it)?.path != displayedItems[it].path }
 
     if (listChanged) {
-        currentAdapter.updateItems(displayedItems, selectionMode)
+        currentAdapter.updateItems(displayedItems, selectionMode, selectedPaths)
     } else {
-        currentAdapter.updateSelection(selectionMode)
+        currentAdapter.updateSelection(selectionMode, selectedPaths)
     }
 }
 
