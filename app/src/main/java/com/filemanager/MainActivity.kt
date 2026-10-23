@@ -595,6 +595,7 @@ private fun toggleSelection(item: FileItem) {
       
 private fun updateSelectionColors() {
     val adapter = recycler.adapter as? FileAdapter ?: return
+    adapter.syncSelection(selectionMode, selectedPaths)
     val lm = recycler.layoutManager ?: return
     val first = when (lm) {
         is GridLayoutManager -> lm.findFirstVisibleItemPosition()
@@ -611,8 +612,8 @@ private fun updateSelectionColors() {
         val item = displayedItems.getOrNull(pos) ?: continue
         val view = lm.findViewByPosition(pos) ?: continue
         adapter.applySelectionToView(view, item.path)
-    } 
-} 
+    }
+}
 
     private fun captureAnchor(item: FileItem) {
     val lm = recycler.layoutManager ?: return
