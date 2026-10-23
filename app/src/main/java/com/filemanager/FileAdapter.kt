@@ -38,6 +38,13 @@ class FileAdapter(
         notifyDataSetChanged()
     }
 
+    fun applySelectionToView(itemView: View, path: String) {
+        val isSelected = selectionMode && selectedPaths.contains(path)
+        itemView.setBackgroundColor(
+            if (isSelected) Color.parseColor("#333B82F6") else Color.TRANSPARENT
+        )
+    }
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
         val layoutId = if (isGrid) R.layout.item_file_grid else R.layout.item_file
         val view = LayoutInflater.from(parent.context).inflate(layoutId, parent, false)
