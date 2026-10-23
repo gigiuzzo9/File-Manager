@@ -16,7 +16,7 @@ class FileAdapter(
     private var items: List<FileItem>,
     private var isGrid: Boolean,
     private var selectionMode: Boolean,
-    private val selectedPaths: Set<String>,
+    private var selectedPaths: Set<String>,
     private val onClick: (FileItem) -> Unit,
     private val onLongClick: (FileItem) -> Unit
 ) : RecyclerView.Adapter<FileAdapter.VH>() {
@@ -33,16 +33,21 @@ class FileAdapter(
 
     fun updateItems(
         newItems: List<FileItem>,
-        newSelectionMode: Boolean
+        newSelectionMode: Boolean,
+        newSelectedPaths: Set<String>
     ) {
         items = newItems
         selectionMode = newSelectionMode
+        selectedPaths = newSelectedPaths
         notifyDataSetChanged()
     }
 
-    fun updateSelection(newSelectionMode: Boolean) {
-        if (selectionMode == newSelectionMode) return
+    fun updateSelection(newSelectionMode: Boolean, newSelectedPaths: Set<String>) {
+        val modeChanged = selectionMode != newSelectionMode
+        val selectionChanged = selectedPaths != newSelectedPaths
+        if (!modeChanged && !selectionChanged) return
         selectionMode = newSelectionMode
+        selectedPaths = newSelectedPaths
         notifyItemRangeChanged(0, itemCount, PAYLOAD_SELECTION)
     }
 
