@@ -105,7 +105,8 @@ class MainActivity : AppCompatActivity() {
     private var selectionMode: Boolean = false
     private val selectedPaths = mutableSetOf<String>()
     private var lastCount: Int = 0
-
+    private var anchorPosition = -1
+    private var anchorOffset = 0
     private val safTreeUris = mutableMapOf<String, Uri>()
 
     private var pendingSafPath: String? = null
@@ -526,44 +527,48 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun enterSelectionMode(item: FileItem) {
-        selectionMode = true
-        selectedPaths.clear()
-        selectedPaths.add(item.path)
-        lastCount = 1
-        updateSelectionUI()
-        renderList()
-    }
+    captureAnchor(item)
+    selectionMode = true
+    selectedPaths.clear()
+    selectedPaths.add(item.path)
+    lastCount = 1
+    updateSelectionUI()
+    renderList()
+    restoreAnchor()
+}
 
-    private fun exitSelectionMode() {
-        selectionMode = false
-        selectedPaths.clear()
-        lastCount = 0
-        updateSelectionUI()
-        renderList()
-        updatePasteButton()
-    }
+private fun exitSelectionMode() {
+    selectionMode = false
+    selectedPaths.clear()
+    lastCount = 0
+    updateSelectionUI()
+    renderList()
+    updatePasteButton()
+}
 
-    private fun clearSelection() {
-        lastCount = selectedPaths.size
-        selectedPaths.clear()
-        updateSelectionUI()
-        renderList()
-    }
+private fun clearSelection() {
+    lastCount = selectedPaths.size
+    selectedPaths.clear()
+    updateSelectionUI()
+    renderList()
+}
 
-    private fun toggleSelection(item: FileItem) {
-        if (selectedPaths.contains(item.path)) {
-            selectedPaths.remove(item.path)
-            if (selectedPaths.isEmpty()) {
-                exitSelectionMode()
-                return
-            }
-        } else {
-            selectedPaths.add(item.path)
+private fun toggleSelection(item: FileItem) {
+    captureAnchor(item)
+    if (selectedPaths.contains(item.path)) {
+        selectedPaths.remove(item.path)
+        if (selectedPaths.isEmpty()) {
+            exitSelectionMode()
+            return
         }
-        lastCount = selectedPaths.size
-        updateSelectionUI()
-        renderList()
+    } else {
+        selectedPaths.add(item.path)
     }
+    lastCount = selectedPaths.size
+    updateSelectionUI()
+    renderList()
+    restoreAnchor()
+}
 
     private fun updateSelectionUI() {
         if (selectionMode) {
@@ -587,7 +592,26 @@ class MainActivity : AppCompatActivity() {
             updatePasteButton()
         }
     }
+      
 
+    private fun captureAnchor(item: FileItem) {
+    val lm = recycler.layoutManager ?: return
+    val pos = displayedItems.indexOfFirst { it.path == item.path }
+    if (pos < 0) return
+    anchorPosition = pos
+    anchorOffset = lm.findViewByPosition(pos)?.top ?: 0
+}
+
+   private fun restoreAnchor() {
+    recycler.post {
+        val lm = recycler.layoutManager ?: return@post
+        if (anchorPosition < 0) return@post
+        when (lm) {
+            is GridLayoutManager -> lm.scrollToPositionWithOffset(anchorPosition, anchorOffset)
+            is LinearLayoutManager -> lm.scrollToPositionWithOffset(anchorPosition, anchorOffset)
+        }
+    }
+} 
     // ============================================================
     // ELIMINA
     // ============================================================
@@ -1967,38 +1991,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderList() {
-        val firstVisible = try {
-            when (val lm = recycler.layoutManager) {
-                is GridLayoutManager -> lm.findFirstVisibleItemPosition()
-                is LinearLayoutManager -> lm.findFirstVisibleItemPosition()
-                else -> 0
+    recycler.layoutManager = if (isGrid) GridLayoutManager(this, 4) else LinearLayoutManager(this)
+
+    recycler.adapter = FileAdapter(
+        items = displayedItems,
+        isGrid = isGrid,
+        selectionMode = selectionMode,
+        selectedPaths = selectedPaths,
+        onClick = { item ->
+            if (selectionMode) toggleSelection(item)
+            else {
+                if (item.isDirectory) {
+                    openDirectoryWithSafCheck(item.path)
+                } else openFileWithDefault(item)
             }
-        } catch (_: Exception) { 0 }
-
-        recycler.layoutManager = if (isGrid) GridLayoutManager(this, 4) else LinearLayoutManager(this)
-
-        recycler.adapter = FileAdapter(
-            items = displayedItems,
-            isGrid = isGrid,
-            selectionMode = selectionMode,
-            selectedPaths = selectedPaths,
-            onClick = { item ->
-                if (selectionMode) toggleSelection(item)
-                else {
-                    if (item.isDirectory) {
-                        openDirectoryWithSafCheck(item.path)
-                    } else openFileWithDefault(item)
-                }
-            },
-            onLongClick = { item ->
-                if (selectionMode) toggleSelection(item) else enterSelectionMode(item)
-            }
-        )
-
-        if (firstVisible > 0 && displayedItems.isNotEmpty()) {
-            recycler.scrollToPosition(firstVisible)
+        },
+        onLongClick = { item ->
+            if (selectionMode) toggleSelection(item) else enterSelectionMode(item)
         }
-    }
+    )
+}
 
     private fun getCategoryKey(mimeType: String, fileName: String): String {
         return when {
