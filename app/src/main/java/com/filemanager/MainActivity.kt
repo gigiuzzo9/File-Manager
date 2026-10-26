@@ -1244,18 +1244,25 @@ private fun updateSelectionColors() {
 
     private fun decomprimiZip(item: FileItem) {
     if (!item.name.lowercase().endsWith(".zip")) {
-        Toast.makeText(this, "Non è un file ZIP", Toast.LENGTH_SHORT).show(); return
+        Toast.makeText(this, "Non è un file ZIP", Toast.LENGTH_SHORT).show()
+        return
     }
+
     val zipSource = item.file
     if (!zipSource.exists()) {
-        Toast.makeText(this, "File non trovato: ${item.name}", Toast.LENGTH_LONG).show(); return
+        Toast.makeText(this, "File non trovato: ${item.name}", Toast.LENGTH_LONG).show()
+        return
     }
+
     val baseName = item.name.substringBeforeLast(".")
-
     val extractDir = File(currentPath, baseName)
-    if (!extractDir.exists()) extractDir.mkdirs()
 
-    // Inserisci SUBITO il FileItem nella lista, senza aspettare loadDirectory
+    // Crea subito la cartella, prima di avviare la decompressione.
+    if (!extractDir.exists() && !extractDir.mkdirs()) {
+        Toast.makeText(this, "Impossibile creare la cartella", Toast.LENGTH_LONG).show()
+        return
+    }
+
     val newItem = FileItem(
         file = extractDir,
         name = extractDir.name,
@@ -1265,10 +1272,14 @@ private fun updateSelectionColors() {
         lastModified = extractDir.lastModified(),
         childrenCount = 0
     )
-    if (!displayedItems.any { it.path == newItem.path }) {
-        allItems = allItems + newItem
-        displayedItems = displayedItems + newItem
-        recycler.adapter?.notifyItemInserted(displayedItems.size - 1)
+
+    // Aggiorna le liste e l'adapter sul thread principale.
+    mainHandler.post {
+        if (displayedItems.none { it.path == newItem.path }) {
+            allItems = allItems + newItem
+            displayedItems = displayedItems + newItem
+            recycler.adapter?.notifyItemInserted(displayedItems.lastIndex)
+        }
     }
 
     Toast.makeText(this, "Decompressione in corso...", Toast.LENGTH_SHORT).show()
@@ -1276,58 +1287,104 @@ private fun updateSelectionColors() {
     heavyExecutor.execute {
         var filesExtracted = 0
         var errorMsg = ""
+
         try {
             val parentDoc = getSafDocumentFile(currentPath)
+            val extractCanonicalPath = extractDir.canonicalPath
+
             ZipInputStream(FileInputStream(zipSource)).use { zis ->
                 var entry: ZipEntry? = zis.nextEntry
+
                 while (entry != null) {
                     val entryName = entry.name
                     val outFile = File(extractDir, entryName)
-                    if (!outFile.canonicalPath.startsWith(extractDir.canonicalPath)) {
-                        zis.closeEntry(); entry = zis.nextEntry; continue
+
+                    // Evita che un nome contenuto nello ZIP scriva fuori dalla cartella.
+                    val outCanonicalPath = outFile.canonicalPath
+                    val isInsideExtractDir =
+                        outCanonicalPath == extractCanonicalPath ||
+                        outCanonicalPath.startsWith(
+                            extractCanonicalPath + File.separator
+                        )
+
+                    if (!isInsideExtractDir) {
+                        zis.closeEntry()
+                        entry = zis.nextEntry
+                        continue
                     }
+
                     if (entry.isDirectory) {
                         outFile.mkdirs()
                     } else {
                         outFile.parentFile?.mkdirs()
+
                         var written = false
+
                         try {
                             FileOutputStream(outFile).use { fos ->
                                 val buffer = ByteArray(ZIP_BUFFER_SIZE)
                                 var length: Int
+
                                 while (zis.read(buffer).also { length = it } > 0) {
                                     fos.write(buffer, 0, length)
                                 }
+
                                 fos.flush()
                             }
+
                             written = true
-                        } catch (_: Exception) {}
-                        if (!written && parentDoc != null) written = tryWriteViaSaf(parentDoc, entryName, zis)
-                        if (written) filesExtracted++
+                        } catch (_: Exception) {
+                            // Se la scrittura diretta non riesce, si prova tramite SAF.
+                        }
+
+                        if (!written && parentDoc != null) {
+                            written = tryWriteViaSaf(parentDoc, entryName, zis)
+                        }
+
+                        if (written) {
+                            filesExtracted++
+                        }
                     }
+
                     zis.closeEntry()
                     entry = zis.nextEntry
                 }
             }
-        } catch (e: Exception) { errorMsg = e.message ?: e.toString() }
+        } catch (e: Exception) {
+            errorMsg = e.message ?: e.toString()
+        }
 
-        if (filesExtracted > 0) scanPath(extractDir.absolutePath)
+        if (filesExtracted > 0) {
+            scanPath(extractDir.absolutePath)
+        }
 
         val extracted = filesExtracted
         val err = errorMsg
+
         mainHandler.post {
+            // Ricarica i dati aggiornati dopo la decompressione.
             loadDirectory(currentPath)
+
             if (extracted > 0) {
-                Toast.makeText(this, "Decompressione terminata", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this,
+                    "Decompressione terminata",
+                    Toast.LENGTH_SHORT
+                ).show()
             } else {
                 AlertDialog.Builder(this)
                     .setTitle("Errore Decompressione")
-                    .setMessage("File: ${item.name}\n\nNessun file estratto.\n$err")
-                    .setPositiveButton("OK", null).show()
+                    .setMessage(
+                        "File: ${item.name}\n\n" +
+                            "Nessun file estratto.\n$err"
+                    )
+                    .setPositiveButton("OK", null)
+                    .show()
             }
         }
     }
 }
+
     private fun tryWriteViaSaf(parentDoc: DocumentFile, entryName: String, zis: ZipInputStream): Boolean {
         return try {
             val parts = entryName.split("/").filter { it.isNotEmpty() }
