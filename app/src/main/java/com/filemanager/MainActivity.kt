@@ -1251,26 +1251,6 @@ private fun decomprimiZip(item: FileItem) {
         Toast.makeText(this, "File non trovato: ${item.name}", Toast.LENGTH_LONG).show(); return
     }
     val baseName = item.name.substringBeforeLast(".")
-
-    val extractDir = File(currentPath, baseName)
-    if (!extractDir.exists()) extractDir.mkdirs()
-
-    // Inserisci SUBITO il FileItem nella lista, senza aspettare loadDirectory
-    val newItem = FileItem(
-        file = extractDir,
-        name = extractDir.name,
-        path = extractDir.absolutePath,
-        isDirectory = true,
-        size = 0L,
-        lastModified = extractDir.lastModified(),
-        childrenCount = 0
-    )
-    if (!displayedItems.any { it.path == newItem.path }) {
-        allItems = allItems + newItem
-        displayedItems = displayedItems + newItem
-        recycler.adapter?.notifyItemInserted(displayedItems.size - 1)
-    }
-
     Toast.makeText(this, "Decompressione in corso...", Toast.LENGTH_SHORT).show()
 
     heavyExecutor.execute {
@@ -1278,6 +1258,15 @@ private fun decomprimiZip(item: FileItem) {
         var errorMsg = ""
         try {
             val parentDoc = getSafDocumentFile(currentPath)
+            val extractDir = File(currentPath, baseName)
+            if (!extractDir.exists()) extractDir.mkdirs()
+
+            // Mostra subito la cartella (vuota) nella lista corrente
+            mainHandler.post { loadDirectory(currentPath) }
+
+            var lastRefresh = 0L
+            val refreshIntervalMs = 800L  // aggiorna al massimo ogni ~0.8s
+
             ZipInputStream(FileInputStream(zipSource)).use { zis ->
                 var entry: ZipEntry? = zis.nextEntry
                 while (entry != null) {
@@ -1303,7 +1292,24 @@ private fun decomprimiZip(item: FileItem) {
                             written = true
                         } catch (_: Exception) {}
                         if (!written && parentDoc != null) written = tryWriteViaSaf(parentDoc, entryName, zis)
-                        if (written) filesExtracted++
+                        if (written) {
+                            filesExtracted++
+
+                            // Refresh throttled della lista mentre estraiamo
+                            val now = System.currentTimeMillis()
+                            if (now - lastRefresh >= refreshIntervalMs) {
+                                lastRefresh = now
+                                val extractedSoFar = filesExtracted
+                                mainHandler.post {
+                                    // Aggiorna la cartella corrente (padre)
+                                    loadDirectory(currentPath)
+                                    // Se stai guardando dentro la cartella in estrazione, aggiorna anche quella
+                                    if (currentPath == extractDir.absolutePath) {
+                                        loadDirectory(extractDir.absolutePath)
+                                    }
+                                }
+                            }
+                        }
                     }
                     zis.closeEntry()
                     entry = zis.nextEntry
@@ -1311,15 +1317,21 @@ private fun decomprimiZip(item: FileItem) {
             }
         } catch (e: Exception) { errorMsg = e.message ?: e.toString() }
 
-        if (filesExtracted > 0) scanPath(extractDir.absolutePath)
+        if (filesExtracted > 0) scanPath(File(currentPath, baseName).absolutePath)
 
         val extracted = filesExtracted
         val err = errorMsg
         mainHandler.post {
-            loadDirectory(currentPath)
             if (extracted > 0) {
-                Toast.makeText(this, "Decompressione terminata", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Estratti $extracted file in: $baseName/", Toast.LENGTH_SHORT).show()
+                // Refresh finale: aggiorna sia il padre sia, se sei dentro, la cartella stessa
+                if (currentPath == File(currentPath, baseName).absolutePath) {
+                    loadDirectory(currentPath)
+                } else {
+                    loadDirectory(currentPath)
+                }
             } else {
+                loadDirectory(currentPath) // per rimuovere eventuale stato "vuoto"
                 AlertDialog.Builder(this)
                     .setTitle("Errore Decompressione")
                     .setMessage("File: ${item.name}\n\nNessun file estratto.\n$err")
