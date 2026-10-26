@@ -56,6 +56,9 @@ import java.util.concurrent.Future
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import net.lingala.zip4j.ZipFile as Zip4jFile
+import net.lingala.zip4j.model.FileHeader as Zip4jHeader
+
 
 class MainActivity : AppCompatActivity() {
 
@@ -1249,123 +1252,161 @@ private fun updateSelectionColors() {
     // ============================================================
 
     private fun decomprimiZip(item: FileItem) {
-        if (!item.name.lowercase().endsWith(".zip")) {
-            Toast.makeText(this, "Non è un file ZIP", Toast.LENGTH_SHORT).show()
-            return
+    if (!item.name.lowercase().endsWith(".zip")) {
+        Toast.makeText(this, "Non è un file ZIP", Toast.LENGTH_SHORT).show()
+        return
+    }
+    val zipSource = item.file
+    if (!zipSource.exists()) {
+        Toast.makeText(this, "File non trovato: ${item.name}", Toast.LENGTH_LONG).show()
+        return
+    }
+
+    val baseName = item.name.substringBeforeLast(".")
+    val extractDir = File(currentPath, baseName)
+
+    // Verifica se serve SAF o possiamo scrivere diretto
+    val isSaf = !canWriteDirectly(currentPath)
+    val parentDoc: DocumentFile? = if (isSaf) getSafDocumentFile(currentPath) else null
+    if (isSaf && parentDoc == null) {
+        requestSafForPath(currentPath) {
+            Toast.makeText(this, "Autorizza l'accesso per decomprimere", Toast.LENGTH_LONG).show()
         }
-        val zipSource = item.file
-        if (!zipSource.exists()) {
-            Toast.makeText(this, "File non trovato: ${item.name}", Toast.LENGTH_LONG).show()
-            return
-        }
-        val baseName = item.name.substringBeforeLast(".")
+        return
+    }
+    if (!isSaf) extractDir.mkdirs()
 
-        val extractDir = File(currentPath, baseName)
+    Toast.makeText(this, "Decompressione in corso...", Toast.LENGTH_SHORT).show()
 
-        // Rileva SAF UNA VOLTA SOLA
-        val isSaf = !canWriteDirectly(currentPath)
-        val parentDoc: DocumentFile? = if (isSaf) getSafDocumentFile(currentPath) else null
-        if (isSaf && parentDoc == null) {
-            requestSafForPath(currentPath) {
-                Toast.makeText(this, "Autorizza l'accesso per decomprimere. Riprova.", Toast.LENGTH_LONG).show()
-            }
-            return
-        }
+    heavyExecutor.execute {
+        var filesExtracted = 0
+        var errorMsg = ""
 
-        if (!isSaf) extractDir.mkdirs()
+        try {
+            val zip = Zip4jFile(zipSource)
+            val headers = zip.fileHeaders  // lista di TUTTI i file dentro lo zip, letta una volta sola
 
-        // Inserimento ottimistico in lista (solo se scriviamo diretto)
-        if (!isSaf) {
-            val newItem = FileItem(
-                file = extractDir,
-                name = extractDir.name,
-                path = extractDir.absolutePath,
-                isDirectory = true,
-                size = 0L,
-                lastModified = extractDir.lastModified(),
-                childrenCount = 0
-            )
-            if (!displayedItems.any { it.path == newItem.path }) {
-                allItems = allItems + newItem
-                displayedItems = displayedItems + newItem
-                recycler.adapter?.notifyItemInserted(displayedItems.size - 1)
-            }
-        }
+            if (isSaf) {
+                // === MODALITÀ SAF ===
+                val dirCache = HashMap<String, DocumentFile>()
+                for (header in headers) {
+                    val entryName = header.fileName.replace('\\', '/')
 
-        Toast.makeText(this, "Decompressione in corso...", Toast.LENGTH_SHORT).show()
+                    if (header.isDirectory) {
+                        // crea la cartella
+                        var p = ""
+                        var d: DocumentFile = parentDoc!!
+                        for (part in entryName.trimEnd('/').split("/").filter { it.isNotEmpty() }) {
+                            p = if (p.isEmpty()) part else "$p/$part"
+                            val next = dirCache[p]
+                                ?: (d.findFile(part) ?: d.createDirectory(part))?.also { dirCache[p] = it }
+                            if (next == null) break
+                            d = next
+                        }
+                    } else {
+                        // crea cartelle intermedie
+                        val parts = entryName.split("/").filter { it.isNotEmpty() }
+                        if (parts.isEmpty()) continue
+                        var p = ""
+                        var d: DocumentFile = parentDoc!!
+                        var ok = true
+                        for (i in 0 until parts.size - 1) {
+                            p = if (p.isEmpty()) parts[i] else "$p/${parts[i]}"
+                            val next = dirCache[p]
+                                ?: (d.findFile(parts[i]) ?: d.createDirectory(parts[i]))?.also { dirCache[p] = it }
+                            if (next == null) { ok = false; break }
+                            d = next
+                        }
+                        if (!ok) continue
 
-        heavyExecutor.execute {
-            var filesExtracted = 0
-            var errorMsg = ""
-            val dirCache = HashMap<String, DocumentFile>()
-
-            try {
-                BufferedInputStream(FileInputStream(zipSource), 128 * 1024).use { bis ->
-                    ZipInputStream(bis).use { zis ->
-                        var entry: ZipEntry? = zis.nextEntry
-                        while (entry != null) {
-                            val entryName = entry.name
-                            val outFile = File(extractDir, entryName)
-                            if (!outFile.canonicalPath.startsWith(extractDir.canonicalPath)) {
-                                zis.closeEntry()
-                                entry = zis.nextEntry
-                                continue
-                            }
-
-                            if (entry.isDirectory) {
-                                if (isSaf) {
-                                    var p = ""
-                                    var d: DocumentFile = parentDoc!!
-                                    for (part in entryName.trimEnd('/').split("/").filter { it.isNotEmpty() }) {
-                                        p = if (p.isEmpty()) part else "$p/$part"
-                                        val next = dirCache[p]
-                                            ?: (d.findFile(part) ?: d.createDirectory(part))?.also { dirCache[p] = it }
-                                        if (next == null) break
-                                        d = next
+                        val fileDoc = d.findFile(parts.last())
+                            ?: d.createFile("application/octet-stream", parts.last())
+                        if (fileDoc != null) {
+                            contentResolver.openOutputStream(fileDoc.uri)?.use { os ->
+                                BufferedOutputStream(os, 128 * 1024).use { bos ->
+                                    zip.getInputStream(header).use { zis ->
+                                        val buf = ByteArray(128 * 1024)
+                                        var n: Int
+                                        while (zis.read(buf).also { n = it } > 0) bos.write(buf, 0, n)
                                     }
-                                } else {
-                                    outFile.mkdirs()
                                 }
-                            } else {
-                                val ok = if (isSaf) {
-                                    writeViaSafFast(parentDoc, entryName, zis, dirCache)
-                                } else {
-                                    writeDirect(outFile, zis)
-                                }
-                                if (ok) filesExtracted++
                             }
-                            zis.closeEntry()
-                            entry = zis.nextEntry
+                            filesExtracted++
                         }
                     }
                 }
-            } catch (e: Exception) {
-                errorMsg = e.message ?: e.toString()
-            }
+            } else {
+                // === MODALITÀ SCRITTURA DIRETTA (velocissima) ===
+                for (header in headers) {
+                    val entryName = header.fileName.replace('\\', '/')
+                    val outFile = File(extractDir, entryName)
 
-            if (filesExtracted > 0 && !isSaf) scanPath(extractDir.absolutePath)
+                    // protezione path traversal
+                    if (!outFile.canonicalPath.startsWith(extractDir.canonicalPath)) continue
 
-            val extracted = filesExtracted
-            val err = errorMsg
-            mainHandler.post {
-                loadDirectory(currentPath)
-                if (extracted > 0) {
-                    Toast.makeText(this, "Decompressione terminata ($extracted file)", Toast.LENGTH_SHORT).show()
-                } else {
-                    AlertDialog.Builder(this)
-                        .setTitle("Errore Decompressione")
-                        .setMessage("File: ${item.name}\n\nNessun file estratto.\n$err")
-                        .setPositiveButton("OK", null)
-                        .show()
+                    if (header.isDirectory) {
+                        outFile.mkdirs()
+                    } else {
+                        outFile.parentFile?.mkdirs()
+                        try {
+                            BufferedOutputStream(FileOutputStream(outFile), 128 * 1024).use { fos ->
+                                zip.getInputStream(header).use { zis ->
+                                    val buf = ByteArray(128 * 1024)
+                                    var n: Int
+                                    while (zis.read(buf).also { n = it } > 0) fos.write(buf, 0, n)
+                                }
+                            }
+                            filesExtracted++
+                        } catch (e: Exception) {
+                            // se fallisce la scrittura diretta, prova via SAF per questo file
+                            val fallbackDoc = getSafDocumentFile(currentPath)
+                            if (fallbackDoc != null) {
+                                val parts = entryName.split("/").filter { it.isNotEmpty() }
+                                if (parts.isNotEmpty()) {
+                                    var d: DocumentFile = fallbackDoc
+                                    var valid = true
+                                    for (i in 0 until parts.size - 1) {
+                                        val next = d.findFile(parts[i]) ?: d.createDirectory(parts[i])
+                                        if (next == null) { valid = false; break }
+                                        d = next
+                                    }
+                                    if (valid) {
+                                        val fileDoc = d.findFile(parts.last())
+                                            ?: d.createFile("application/octet-stream", parts.last())
+                                        if (fileDoc != null) {
+                                            contentResolver.openOutputStream(fileDoc.uri)?.use { os ->
+                                                zip.getInputStream(header).use { zis -> zis.copyTo(os, 128 * 1024) }
+                                            }
+                                            filesExtracted++
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
+            }
+        } catch (e: Exception) {
+            errorMsg = e.message ?: e.toString()
+        }
+
+        val extracted = filesExtracted
+        val err = errorMsg
+
+        mainHandler.post {
+            if (extracted > 0) {
+                Toast.makeText(this, "Decompressione terminata ($extracted file)", Toast.LENGTH_SHORT).show()
+                loadDirectory(currentPath)
+            } else {
+                AlertDialog.Builder(this)
+                    .setTitle("Errore Decompressione")
+                    .setMessage("Nessun file estratto.\n$err")
+                    .setPositiveButton("OK", null)
+                    .show()
             }
         }
     }
-
-    /**
-     * Verifica se possiamo scrivere direttamente con FileOutputStream nella cartella.
-     * Prova a creare un file temporaneo e lo cancella subito.
-     */
+}
     private fun canWriteDirectly(dirPath: String): Boolean {
         return try {
             val probe = File(dirPath, ".write_probe_${System.nanoTime()}")
