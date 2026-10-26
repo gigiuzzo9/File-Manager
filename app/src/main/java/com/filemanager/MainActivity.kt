@@ -1254,7 +1254,22 @@ private fun updateSelectionColors() {
 
     val extractDir = File(currentPath, baseName)
     if (!extractDir.exists()) extractDir.mkdirs()
-    loadDirectory(currentPath)
+
+    // Inserisci SUBITO il FileItem nella lista, senza aspettare loadDirectory
+    val newItem = FileItem(
+        file = extractDir,
+        name = extractDir.name,
+        path = extractDir.absolutePath,
+        isDirectory = true,
+        size = 0L,
+        lastModified = extractDir.lastModified(),
+        childrenCount = 0
+    )
+    if (!displayedItems.any { it.path == newItem.path }) {
+        allItems = allItems + newItem
+        displayedItems = displayedItems + newItem
+        recycler.adapter?.notifyItemInserted(displayedItems.size - 1)
+    }
 
     Toast.makeText(this, "Decompressione in corso...", Toast.LENGTH_SHORT).show()
 
