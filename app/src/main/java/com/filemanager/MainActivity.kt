@@ -1261,7 +1261,23 @@ private fun updateSelectionColors() {
             val extractDir = File(currentPath, baseName)
             if (!extractDir.exists()) extractDir.mkdirs()
 
-            mainHandler.post { loadDirectory(currentPath) }
+            // Aggiungi subito la cartella alla lista in memoria
+            val newItem = FileItem(
+                file = extractDir,
+                name = extractDir.name,
+                path = extractDir.absolutePath,
+                isDirectory = true,
+                size = 0L,
+                lastModified = extractDir.lastModified(),
+                childrenCount = 0
+            )
+            mainHandler.post {
+                if (!displayedItems.any { it.path == newItem.path }) {
+                    val newAll = allItems + newItem
+                    allItems = newAll
+                    applyFilters()
+                }
+            }
 
             ZipInputStream(FileInputStream(zipSource)).use { zis ->
                 var entry: ZipEntry? = zis.nextEntry
@@ -1313,7 +1329,6 @@ private fun updateSelectionColors() {
         }
     }
 }
-
     private fun tryWriteViaSaf(parentDoc: DocumentFile, entryName: String, zis: ZipInputStream): Boolean {
         return try {
             val parts = entryName.split("/").filter { it.isNotEmpty() }
