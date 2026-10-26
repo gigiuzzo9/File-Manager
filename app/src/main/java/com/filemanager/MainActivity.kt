@@ -1243,74 +1243,76 @@ private fun updateSelectionColors() {
     }
 
     private fun decomprimiZip(item: FileItem) {
-        if (!item.name.lowercase().endsWith(".zip")) {
-            Toast.makeText(this, "Non è un file ZIP", Toast.LENGTH_SHORT).show(); return
-        }
-        val zipSource = item.file
-        if (!zipSource.exists()) {
-            Toast.makeText(this, "File non trovato: ${item.name}", Toast.LENGTH_LONG).show(); return
-        }
-        val baseName = item.name.substringBeforeLast(".")
-        Toast.makeText(this, "Decompressione in corso...", Toast.LENGTH_SHORT).show()
+    if (!item.name.lowercase().endsWith(".zip")) {
+        Toast.makeText(this, "Non è un file ZIP", Toast.LENGTH_SHORT).show(); return
+    }
+    val zipSource = item.file
+    if (!zipSource.exists()) {
+        Toast.makeText(this, "File non trovato: ${item.name}", Toast.LENGTH_LONG).show(); return
+    }
+    val baseName = item.name.substringBeforeLast(".")
+    Toast.makeText(this, "Decompressione in corso...", Toast.LENGTH_SHORT).show()
 
-        heavyExecutor.execute {
-            var filesExtracted = 0
-            var errorMsg = ""
-            try {
-                val parentDoc = getSafDocumentFile(currentPath)
-                val extractDir = File(currentPath, baseName)
-                if (!extractDir.exists()) extractDir.mkdirs()
+    heavyExecutor.execute {
+        var filesExtracted = 0
+        var errorMsg = ""
+        try {
+            val parentDoc = getSafDocumentFile(currentPath)
+            val extractDir = File(currentPath, baseName)
+            if (!extractDir.exists()) extractDir.mkdirs()
 
-                ZipInputStream(FileInputStream(zipSource)).use { zis ->
-                    var entry: ZipEntry? = zis.nextEntry
-                    while (entry != null) {
-                        val entryName = entry.name
-                        val outFile = File(extractDir, entryName)
-                        if (!outFile.canonicalPath.startsWith(extractDir.canonicalPath)) {
-                            zis.closeEntry(); entry = zis.nextEntry; continue
-                        }
-                        if (entry.isDirectory) {
-                            outFile.mkdirs()
-                        } else {
-                            outFile.parentFile?.mkdirs()
-                            var written = false
-                            try {
-                                FileOutputStream(outFile).use { fos ->
-                                    val buffer = ByteArray(ZIP_BUFFER_SIZE)
-                                    var length: Int
-                                    while (zis.read(buffer).also { length = it } > 0) {
-                                        fos.write(buffer, 0, length)
-                                    }
-                                    fos.flush()
-                                }
-                                written = true
-                            } catch (_: Exception) {}
-                            if (!written && parentDoc != null) written = tryWriteViaSaf(parentDoc, entryName, zis)
-                            if (written) filesExtracted++
-                        }
-                        zis.closeEntry()
-                        entry = zis.nextEntry
+            mainHandler.post { loadDirectory(currentPath) }
+
+            ZipInputStream(FileInputStream(zipSource)).use { zis ->
+                var entry: ZipEntry? = zis.nextEntry
+                while (entry != null) {
+                    val entryName = entry.name
+                    val outFile = File(extractDir, entryName)
+                    if (!outFile.canonicalPath.startsWith(extractDir.canonicalPath)) {
+                        zis.closeEntry(); entry = zis.nextEntry; continue
                     }
+                    if (entry.isDirectory) {
+                        outFile.mkdirs()
+                    } else {
+                        outFile.parentFile?.mkdirs()
+                        var written = false
+                        try {
+                            FileOutputStream(outFile).use { fos ->
+                                val buffer = ByteArray(ZIP_BUFFER_SIZE)
+                                var length: Int
+                                while (zis.read(buffer).also { length = it } > 0) {
+                                    fos.write(buffer, 0, length)
+                                }
+                                fos.flush()
+                            }
+                            written = true
+                        } catch (_: Exception) {}
+                        if (!written && parentDoc != null) written = tryWriteViaSaf(parentDoc, entryName, zis)
+                        if (written) filesExtracted++
+                    }
+                    zis.closeEntry()
+                    entry = zis.nextEntry
                 }
-            } catch (e: Exception) { errorMsg = e.message ?: e.toString() }
+            }
+        } catch (e: Exception) { errorMsg = e.message ?: e.toString() }
 
-            if (filesExtracted > 0) scanPath(File(currentPath, baseName).absolutePath)
+        if (filesExtracted > 0) scanPath(File(currentPath, baseName).absolutePath)
 
-            val extracted = filesExtracted
-            val err = errorMsg
-            mainHandler.post {
-                if (extracted > 0) {
-                    Toast.makeText(this, "Estratti $extracted file in: $baseName/", Toast.LENGTH_SHORT).show()
-                    loadDirectory(currentPath)
-                } else {
-                    AlertDialog.Builder(this)
-                        .setTitle("Errore Decompressione")
-                        .setMessage("File: ${item.name}\n\nNessun file estratto.\n$err")
-                        .setPositiveButton("OK", null).show()
-                }
+        val extracted = filesExtracted
+        val err = errorMsg
+        mainHandler.post {
+            if (extracted > 0) {
+                Toast.makeText(this, "Estratti $extracted file in: $baseName/", Toast.LENGTH_SHORT).show()
+                loadDirectory(currentPath)
+            } else {
+                AlertDialog.Builder(this)
+                    .setTitle("Errore Decompressione")
+                    .setMessage("File: ${item.name}\n\nNessun file estratto.\n$err")
+                    .setPositiveButton("OK", null).show()
             }
         }
     }
+}
 
     private fun tryWriteViaSaf(parentDoc: DocumentFile, entryName: String, zis: ZipInputStream): Boolean {
         return try {
