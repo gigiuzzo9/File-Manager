@@ -1255,7 +1255,7 @@ private fun updateSelectionColors() {
     val extractDir = File(currentPath, baseName)
     if (!extractDir.exists()) extractDir.mkdirs()
 
-    // Inserisci SUBITO il FileItem nella lista, senza aspettare loadDirectory
+    // Aggiungi subito la cartella alla lista
     val newItem = FileItem(
         file = extractDir,
         name = extractDir.name,
@@ -1265,10 +1265,9 @@ private fun updateSelectionColors() {
         lastModified = extractDir.lastModified(),
         childrenCount = 0
     )
-    if (!displayedItems.any { it.path == newItem.path }) {
+    if (allItems.none { it.path == newItem.path }) {
         allItems = allItems + newItem
-        displayedItems = displayedItems + newItem
-        recycler.adapter?.notifyItemInserted(displayedItems.size - 1)
+        applyFilters()
     }
 
     Toast.makeText(this, "Decompressione in corso...", Toast.LENGTH_SHORT).show()
@@ -1318,11 +1317,7 @@ private fun updateSelectionColors() {
         mainHandler.post {
             loadDirectory(currentPath)
             if (extracted > 0) {
-                AlertDialog.Builder(this)
-                    .setTitle("Estrazione completata")
-                    .setMessage("Estratti $extracted file in: $baseName/")
-                    .setPositiveButton("OK", null)
-                    .show()
+                Toast.makeText(this, "Decompressione terminata", Toast.LENGTH_SHORT).show()
             } else {
                 AlertDialog.Builder(this)
                     .setTitle("Errore Decompressione")
