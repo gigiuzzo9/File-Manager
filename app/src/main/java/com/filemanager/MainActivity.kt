@@ -44,6 +44,8 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.color.MaterialColors
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -1242,91 +1244,190 @@ private fun updateSelectionColors() {
         }
     }
 
-private fun decomprimiZip(item: FileItem) {
-    // ... validazioni come prima ...
+    // ============================================================
+    // DECOMPRESSIONE ZIP
+    // ============================================================
 
-    val extractDir = File(currentPath, baseName)
-    // ... inserimento ottimistico in lista ...
+    private fun decomprimiZip(item: FileItem) {
+        if (!item.name.lowercase().endsWith(".zip")) {
+            Toast.makeText(this, "Non è un file ZIP", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val zipSource = item.file
+        if (!zipSource.exists()) {
+            Toast.makeText(this, "File non trovato: ${item.name}", Toast.LENGTH_LONG).show()
+            return
+        }
+        val baseName = item.name.substringBeforeLast(".")
 
-    heavyExecutor.execute {
-        var filesExtracted = 0
-        var errorMsg = ""
-        val isSaf = needsStupidWritePermissions(currentPath) || isRestrictedSAFOnlyRoot(currentPath)
-        val parentDoc = if (isSaf) getSafDocumentFile(currentPath) else null
-        val parentUri = if (isSaf) getDocumentFile(extractDir.absolutePath)?.uri else null
+        val extractDir = File(currentPath, baseName)
 
-        try {
-            ZipInputStream(BufferedInputStream(FileInputStream(zipSource), 128 * 1024)).use { zis ->
-                var entry = zis.nextEntry
-                while (entry != null) {
-                    val entryName = entry.name
-                    val outFile = File(extractDir, entryName)
+        // Rileva SAF UNA VOLTA SOLA
+        val isSaf = !canWriteDirectly(currentPath)
+        val parentDoc: DocumentFile? = if (isSaf) getSafDocumentFile(currentPath) else null
+        if (isSaf && parentDoc == null) {
+            requestSafForPath(currentPath) {
+                Toast.makeText(this, "Autorizza l'accesso per decomprimere. Riprova.", Toast.LENGTH_LONG).show()
+            }
+            return
+        }
 
-                    // path traversal check
-                    if (!outFile.canonicalPath.startsWith(extractDir.canonicalPath)) {
-                        zis.closeEntry(); entry = zis.nextEntry; continue
-                    }
+        if (!isSaf) extractDir.mkdirs()
 
-                    if (entry.isDirectory) {
-                        if (isSaf) parentDoc?.createDirectory(entryName) 
-                        else outFile.mkdirs()
-                    } else {
-                        val ok = if (!isSaf) {
-                            writeDirect(outFile, zis)
-                        } else {
-                            writeViaSafFast(parentDoc, entryName, zis)
+        // Inserimento ottimistico in lista (solo se scriviamo diretto)
+        if (!isSaf) {
+            val newItem = FileItem(
+                file = extractDir,
+                name = extractDir.name,
+                path = extractDir.absolutePath,
+                isDirectory = true,
+                size = 0L,
+                lastModified = extractDir.lastModified(),
+                childrenCount = 0
+            )
+            if (!displayedItems.any { it.path == newItem.path }) {
+                allItems = allItems + newItem
+                displayedItems = displayedItems + newItem
+                recycler.adapter?.notifyItemInserted(displayedItems.size - 1)
+            }
+        }
+
+        Toast.makeText(this, "Decompressione in corso...", Toast.LENGTH_SHORT).show()
+
+        heavyExecutor.execute {
+            var filesExtracted = 0
+            var errorMsg = ""
+            val dirCache = HashMap<String, DocumentFile>()
+
+            try {
+                BufferedInputStream(FileInputStream(zipSource), 128 * 1024).use { bis ->
+                    ZipInputStream(bis).use { zis ->
+                        var entry: ZipEntry? = zis.nextEntry
+                        while (entry != null) {
+                            val entryName = entry.name
+                            val outFile = File(extractDir, entryName)
+                            if (!outFile.canonicalPath.startsWith(extractDir.canonicalPath)) {
+                                zis.closeEntry()
+                                entry = zis.nextEntry
+                                continue
+                            }
+
+                            if (entry.isDirectory) {
+                                if (isSaf) {
+                                    var p = ""
+                                    var d: DocumentFile = parentDoc!!
+                                    for (part in entryName.trimEnd('/').split("/").filter { it.isNotEmpty() }) {
+                                        p = if (p.isEmpty()) part else "$p/$part"
+                                        val next = dirCache[p]
+                                            ?: (d.findFile(part) ?: d.createDirectory(part))?.also { dirCache[p] = it }
+                                        if (next == null) break
+                                        d = next
+                                    }
+                                } else {
+                                    outFile.mkdirs()
+                                }
+                            } else {
+                                val ok = if (isSaf) {
+                                    writeViaSafFast(parentDoc, entryName, zis, dirCache)
+                                } else {
+                                    writeDirect(outFile, zis)
+                                }
+                                if (ok) filesExtracted++
+                            }
+                            zis.closeEntry()
+                            entry = zis.nextEntry
                         }
-                        if (ok) filesExtracted++
                     }
-                    zis.closeEntry()
-                    entry = zis.nextEntry
+                }
+            } catch (e: Exception) {
+                errorMsg = e.message ?: e.toString()
+            }
+
+            if (filesExtracted > 0 && !isSaf) scanPath(extractDir.absolutePath)
+
+            val extracted = filesExtracted
+            val err = errorMsg
+            mainHandler.post {
+                loadDirectory(currentPath)
+                if (extracted > 0) {
+                    Toast.makeText(this, "Decompressione terminata ($extracted file)", Toast.LENGTH_SHORT).show()
+                } else {
+                    AlertDialog.Builder(this)
+                        .setTitle("Errore Decompressione")
+                        .setMessage("File: ${item.name}\n\nNessun file estratto.\n$err")
+                        .setPositiveButton("OK", null)
+                        .show()
                 }
             }
-        } catch (e: Exception) { errorMsg = e.message ?: e.toString() }
-
-        // scan SOLO se necessario, e non ricorsivo su tutto
-        if (filesExtracted > 0 && !isSaf) {
-            // opzionale: scanPath solo se serve
-        }
-
-        mainHandler.post {
-            // NON ricaricare tutta la directory: aggiorna solo la entry
-            loadDirectory(currentPath)   // se davvero serve, altrimenti rimuovi
-            // ...
         }
     }
-}
 
-private fun writeDirect(outFile: File, zis: ZipInputStream): Boolean = try {
-    outFile.parentFile?.mkdirs()
-    BufferedOutputStream(FileOutputStream(outFile), 128 * 1024).use { fos ->
-        val buf = ByteArray(128 * 1024)
-        var n: Int
-        while (zis.read(buf).also { n = it } > 0) fos.write(buf, 0, n)
+    /**
+     * Verifica se possiamo scrivere direttamente con FileOutputStream nella cartella.
+     * Prova a creare un file temporaneo e lo cancella subito.
+     */
+    private fun canWriteDirectly(dirPath: String): Boolean {
+        return try {
+            val probe = File(dirPath, ".write_probe_${System.nanoTime()}")
+            val ok = probe.createNewFile()
+            if (ok) probe.delete()
+            ok
+        } catch (_: Exception) {
+            false
+        }
     }
-    true
-} catch (e: Exception) { false }
 
-private fun writeViaSafFast(parentDoc: DocumentFile?, entryName: String, zis: ZipInputStream): Boolean {
-    if (parentDoc == null) return false
-    // crea le cartelle intermedie UNA volta sola per path
-    val parts = entryName.split("/")
-    var doc = parentDoc
-    for (i in 0 until parts.size - 1) {
-        doc = doc.findFile(parts[i]) ?: doc.createDirectory(parts[i]) ?: return false
-    }
-    val file = doc.findFile(parts.last()) ?: doc.createFile("application/octet-stream", parts.last()) ?: return false
-    return try {
-        contentResolver.openOutputStream(file.uri)?.use { os ->
-            val bos = BufferedOutputStream(os, 128 * 1024)
+    private fun writeDirect(outFile: File, zis: ZipInputStream): Boolean = try {
+        outFile.parentFile?.mkdirs()
+        BufferedOutputStream(FileOutputStream(outFile), 128 * 1024).use { fos ->
             val buf = ByteArray(128 * 1024)
             var n: Int
-            while (zis.read(buf).also { n = it } > 0) bos.write(buf, 0, n)
-            bos.flush()
+            while (zis.read(buf).also { n = it } > 0) fos.write(buf, 0, n)
         }
         true
-    } catch (e: Exception) { false }
-}
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun writeViaSafFast(
+        parentDoc: DocumentFile?,
+        entryName: String,
+        zis: ZipInputStream,
+        dirCache: HashMap<String, DocumentFile>
+    ): Boolean {
+        if (parentDoc == null) return false
+        val parts = entryName.split("/").filter { it.isNotEmpty() }
+        if (parts.isEmpty()) return false
+
+        var currentPath = ""
+        var doc: DocumentFile = parentDoc
+        for (i in 0 until parts.size - 1) {
+            currentPath = if (currentPath.isEmpty()) parts[i] else "$currentPath/${parts[i]}"
+            val next = dirCache[currentPath]
+                ?: (doc.findFile(parts[i]) ?: doc.createDirectory(parts[i]))?.also { dirCache[currentPath] = it }
+                ?: return false
+            doc = next
+        }
+
+        val fileName = parts.last()
+        val fileDoc = doc.findFile(fileName)
+            ?: doc.createFile("application/octet-stream", fileName)
+            ?: return false
+
+        return try {
+            contentResolver.openOutputStream(fileDoc.uri)?.use { os ->
+                BufferedOutputStream(os, 128 * 1024).use { bos ->
+                    val buf = ByteArray(128 * 1024)
+                    var n: Int
+                    while (zis.read(buf).also { n = it } > 0) bos.write(buf, 0, n)
+                    bos.flush()
+                }
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     private fun tryWriteViaSaf(parentDoc: DocumentFile, entryName: String, zis: ZipInputStream): Boolean {
         return try {
