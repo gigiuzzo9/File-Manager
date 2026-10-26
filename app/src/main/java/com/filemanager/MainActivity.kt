@@ -1242,9 +1242,6 @@ private fun updateSelectionColors() {
         }
     }
 
-    
-
-
 private fun decomprimiZip(item: FileItem) {
     if (!item.name.lowercase().endsWith(".zip")) {
         Toast.makeText(this, "Non è un file ZIP", Toast.LENGTH_SHORT).show(); return
@@ -1258,9 +1255,6 @@ private fun decomprimiZip(item: FileItem) {
     val extractDir = File(currentPath, baseName)
     if (!extractDir.exists()) extractDir.mkdirs()
 
-    // Segna la cartella come "pending": verrà mostrata anche se vuota
-    pendingDirs.add(extractDir.absolutePath)
-
     // Inserisci SUBITO il FileItem nella lista, senza aspettare loadDirectory
     val newItem = FileItem(
         file = extractDir,
@@ -1271,20 +1265,10 @@ private fun decomprimiZip(item: FileItem) {
         lastModified = extractDir.lastModified(),
         childrenCount = 0
     )
-
-    if (!allItems.any { it.path == newItem.path }) {
+    if (!displayedItems.any { it.path == newItem.path }) {
         allItems = allItems + newItem
         displayedItems = displayedItems + newItem
-    }
-
-    // Trova la posizione reale (potrebbe essere ordinata: cartelle prima, alfabetico, ecc.)
-    val pos = displayedItems.indexOfFirst { it.path == newItem.path }
-    if (pos >= 0) {
-        recycler.adapter?.notifyItemInserted(pos)
-        recycler.scrollToPosition(pos)
-    } else {
-        // Se non è in displayedItems (es. filtro attivo), forza un reload che la includa
-        loadDirectory(currentPath)
+        recycler.adapter?.notifyItemInserted(displayedItems.size - 1)
     }
 
     Toast.makeText(this, "Decompressione in corso...", Toast.LENGTH_SHORT).show()
@@ -1331,15 +1315,8 @@ private fun decomprimiZip(item: FileItem) {
 
         val extracted = filesExtracted
         val err = errorMsg
-
         mainHandler.post {
-            // Rimuovi il flag "pending" ora che la cartella ha (o non ha) contenuto reale
-            pendingDirs.remove(extractDir.absolutePath)
-
-            // Ricarica la lista (ora la cartella è inclusa perché non è più pending
-            // ma ha contenuto reale, oppure perché mostri sempre le vuote)
             loadDirectory(currentPath)
-
             if (extracted > 0) {
                 Toast.makeText(this, "Decompressione terminata", Toast.LENGTH_SHORT).show()
             } else {
@@ -1351,6 +1328,7 @@ private fun decomprimiZip(item: FileItem) {
         }
     }
 }
+
     private fun tryWriteViaSaf(parentDoc: DocumentFile, entryName: String, zis: ZipInputStream): Boolean {
         return try {
             val parts = entryName.split("/").filter { it.isNotEmpty() }
