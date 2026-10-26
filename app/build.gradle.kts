@@ -47,7 +47,4 @@ dependencies {
     // Aggiunte per il visualizzatore immagini
     implementation("androidx.viewpager2:viewpager2:1.1.0")
     implementation("com.github.chrisbanes:PhotoView:2.3.0")
-
-    // Zip4j per decompressione veloce
-    implementation("net.lingala.zip4j:zip4j:2.11.5")
 }
