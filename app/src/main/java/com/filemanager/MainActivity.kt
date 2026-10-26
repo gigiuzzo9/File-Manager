@@ -1251,6 +1251,11 @@ private fun updateSelectionColors() {
         Toast.makeText(this, "File non trovato: ${item.name}", Toast.LENGTH_LONG).show(); return
     }
     val baseName = item.name.substringBeforeLast(".")
+
+    val extractDir = File(currentPath, baseName)
+    if (!extractDir.exists()) extractDir.mkdirs()
+    loadDirectory(currentPath)
+
     Toast.makeText(this, "Decompressione in corso...", Toast.LENGTH_SHORT).show()
 
     heavyExecutor.execute {
@@ -1258,27 +1263,6 @@ private fun updateSelectionColors() {
         var errorMsg = ""
         try {
             val parentDoc = getSafDocumentFile(currentPath)
-            val extractDir = File(currentPath, baseName)
-            if (!extractDir.exists()) extractDir.mkdirs()
-
-            // Aggiungi subito la cartella alla lista in memoria
-            val newItem = FileItem(
-                file = extractDir,
-                name = extractDir.name,
-                path = extractDir.absolutePath,
-                isDirectory = true,
-                size = 0L,
-                lastModified = extractDir.lastModified(),
-                childrenCount = 0
-            )
-            mainHandler.post {
-                if (!displayedItems.any { it.path == newItem.path }) {
-                    val newAll = allItems + newItem
-                    allItems = newAll
-                    applyFilters()
-                }
-            }
-
             ZipInputStream(FileInputStream(zipSource)).use { zis ->
                 var entry: ZipEntry? = zis.nextEntry
                 while (entry != null) {
@@ -1312,14 +1296,18 @@ private fun updateSelectionColors() {
             }
         } catch (e: Exception) { errorMsg = e.message ?: e.toString() }
 
-        if (filesExtracted > 0) scanPath(File(currentPath, baseName).absolutePath)
+        if (filesExtracted > 0) scanPath(extractDir.absolutePath)
 
         val extracted = filesExtracted
         val err = errorMsg
         mainHandler.post {
+            loadDirectory(currentPath)
             if (extracted > 0) {
-                Toast.makeText(this, "Estratti $extracted file in: $baseName/", Toast.LENGTH_SHORT).show()
-                loadDirectory(currentPath)
+                AlertDialog.Builder(this)
+                    .setTitle("Estrazione completata")
+                    .setMessage("Estratti $extracted file in: $baseName/")
+                    .setPositiveButton("OK", null)
+                    .show()
             } else {
                 AlertDialog.Builder(this)
                     .setTitle("Errore Decompressione")
