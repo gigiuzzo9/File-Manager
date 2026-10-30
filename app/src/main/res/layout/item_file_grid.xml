@@ -16,20 +16,20 @@
 
     <View
         android:layout_width="match_parent"
-        android:layout_height="2dp" />
+        android:layout_height="1dp" />
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:minHeight="52dp"
+        android:minHeight="42dp"
         android:gravity="top|center_horizontal">
 
         <TextView
             android:id="@+id/itemName"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:paddingTop="4dp"
+            android:paddingTop="1dp"
             android:textSize="12sp"
             android:maxLines="2"
             android:ellipsize="end"
