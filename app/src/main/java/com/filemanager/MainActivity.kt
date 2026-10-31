@@ -108,7 +108,7 @@ class MainActivity : AppCompatActivity() {
     private var anchorPosition = -1
     private var anchorOffset = 0
     private val safTreeUris = mutableMapOf<String, Uri>()
-
+    private var skipNextResumeRefresh = false
     private var pendingSafPath: String? = null
     private var pendingSafAction: (() -> Unit)? = null
     private var pendingSafOnDenied: (() -> Unit)? = null
@@ -215,24 +215,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onResume() {
-        super.onResume()
-        isAppVisible = true
+    super.onResume()
+    isAppVisible = true
 
-        mainHandler.removeCallbacks(storagePollRunnable)
-        mainHandler.post(storagePollRunnable)
+    mainHandler.removeCallbacks(storagePollRunnable)
+    mainHandler.post(storagePollRunnable)
 
-        if (hasStoragePermission()) {
-            val cat = activeCategory
-            if (cat != null) {
-                refreshCategory(cat)
-            } else {
-                loadDirectory(currentPath)
-            }
+    if (skipNextResumeRefresh) {
+        skipNextResumeRefresh = false
+    } else if (hasStoragePermission()) {
+        val cat = activeCategory
+        if (cat != null) {
+            refreshCategory(cat)
+        } else {
+            loadDirectory(currentPath)
         }
-
-        updateStorageCards()
-        updatePasteButton()
     }
+
+    updateStorageCards()
+    updatePasteButton()
+}
 
     private fun refreshCategory(cat: String) {
         txtPath.text = "Filtro: $cat"
@@ -2111,25 +2113,27 @@ private fun decomprimiZip(item: FileItem) {
     }
 
     private fun openImageViewer(item: FileItem) {
-        val imagePaths = displayedItems
-            .filter { !it.isDirectory && isImageFile(it.name) }
-            .map { it.path }
+    val imagePaths = displayedItems
+        .filter { !it.isDirectory && isImageFile(it.name) }
+        .map { it.path }
 
-        if (imagePaths.isEmpty()) return
+    if (imagePaths.isEmpty()) return
 
-        val startIndex = imagePaths.indexOf(item.path).coerceAtLeast(0)
+    val startIndex = imagePaths.indexOf(item.path).coerceAtLeast(0)
 
-        val intent = Intent(this, ImageViewerActivity::class.java)
-        intent.putStringArrayListExtra(ImageViewerActivity.EXTRA_PATHS, ArrayList(imagePaths))
-        intent.putExtra(ImageViewerActivity.EXTRA_INDEX, startIndex)
-        startActivity(intent)
-    }
+    val intent = Intent(this, ImageViewerActivity::class.java)
+    intent.putStringArrayListExtra(ImageViewerActivity.EXTRA_PATHS, ArrayList(imagePaths))
+    intent.putExtra(ImageViewerActivity.EXTRA_INDEX, startIndex)
+    skipNextResumeRefresh = true
+    startActivity(intent)
+}
 
     private fun openMediaPlayer(item: FileItem) {
-        val intent = Intent(this, VideoPlayerActivity::class.java)
-        intent.putExtra(VideoPlayerActivity.EXTRA_PATH, item.path)
-        startActivity(intent)
-    }
+    val intent = Intent(this, VideoPlayerActivity::class.java)
+    intent.putExtra(VideoPlayerActivity.EXTRA_PATH, item.path)
+    skipNextResumeRefresh = true
+    startActivity(intent)
+}
 
     private fun installApk(item: FileItem) {
         try {
